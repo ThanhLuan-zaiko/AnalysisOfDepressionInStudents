@@ -11,3 +11,33 @@ wheels/
 
 # Internal data
 *.csv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# uv cache (NOT uv.lock - that should be committed!)
+.cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment variables
+.env
+*.env
+
+#docs
+*.md
+!/README.md
+*.txt
+*.pdf
+*.docx
+*.pptx
+*.html
+*.log

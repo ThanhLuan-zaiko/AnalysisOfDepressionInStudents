@@ -4,4 +4,24 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "darts>=0.43.0",
+    "datashader>=0.19.0",
+    "duckdb>=1.5.1",
+    "factor-analyzer>=0.5.1",
+    "holoviews>=1.22.1",
+    "lifelines>=0.30.3",
+    "lightgbm>=4.6.0",
+    "neuralprophet>=0.5.0",
+    "optuna>=4.8.0",
+    "pingouin>=0.6.1",
+    "plotly>=6.6.0",
+    "polars",
+    "pyarrow>=23.0.1",
+    "statsmodels>=0.14.6",
+    "torch>=2.11.0",
+    "torchaudio>=2.11.0",
+    "torchvision>=0.26.0",
+    "vowpalwabbit>=9.11.2",
+    "xgboost>=3.2.0",
+]
