@@ -264,6 +264,7 @@ uv run python verify_gpu.py
 AnalysisOfDepressionInStudents/
 │
 ├── main.py                      # File chính - chạy phân tích tại đây
+├── config.py                    # ⭐ Auto-detect CPU/GPU + Config
 ├── pyproject.toml               # Khai báo dependencies và config dự án
 ├── uv.lock                      # ⚠️ QUAN TRỌNG: Lock file - commit lên Git!
 ├── .python-version              # Yêu cầu Python 3.14
@@ -416,6 +417,233 @@ uv run python main.py  # uv tự tìm Python đúng version
 # 2. Add interpreter → Existing environment
 # 3. Chọn .venv/Scripts/python.exe
 ```
+
+---
+
+## 💻 Code Cho CPU & GPU (Không Cần Viết Lại!)
+
+### ❓ Câu Hỏi: Code Có Cần Thay Đổi Khi Chạy Trên GPU Không?
+
+**TRẢ LỜI NGẮN: ❌ KHÔNG!** Chỉ cần thêm **1-2 dòng code** để tự động switch giữa CPU/GPU.
+
+---
+
+### 🎯 Auto-Detect Device Template
+
+Dự án đã có sẵn file `config.py` tự động detect và cấu hình device:
+
+```python
+# Cách dùng đơn giản nhất
+from config import Config, to_device
+
+Config.print_config()  # In thông tin device
+
+# Tạo model
+model = MyModel()
+model = model.to(Config.DEVICE)  # ← Tự động CPU hoặc GPU
+
+# Đưa data lên device
+X = to_device(X)  # ← Shortcut cho X.to(Config.DEVICE)
+y = to_device(y)
+
+# Training loop - GIỐNG HỆT cho CPU và GPU!
+predictions = model(X)
+loss = criterion(predictions, y)
+```
+
+---
+
+### 📝 Cách Hoạt Động
+
+**Step 1: Import config**
+```python
+from config import Config, get_device, to_device
+```
+
+**Step 2: Config tự động detect**
+```python
+# Config.py tự làm:
+if torch.cuda.is_available():
+    DEVICE = "cuda"  # NVIDIA GPU
+elif torch.backends.mps.is_available():
+    DEVICE = "mps"   # Apple Silicon
+else:
+    DEVICE = "cpu"   # Fallback
+```
+
+**Step 3: Sử dụng trong code**
+```python
+import torch
+from config import Config
+
+# Model
+model = torch.nn.Linear(10, 5)
+model = model.to(Config.DEVICE)  # ← 1 dòng duy nhất!
+
+# Data
+X = torch.randn(32, 10)
+X = X.to(Config.DEVICE)  # ← 1 dòng duy nhất!
+
+# Training loop - KHÔNG CẦN THAY ĐỔI GÌ!
+output = model(X)  # ← Giống hệt CPU và GPU
+loss = loss_fn(output, y)
+loss.backward()
+optimizer.step()
+```
+
+---
+
+### ⚡ So Sánh Code CPU vs GPU
+
+| Phần | CPU | GPU | Khác Biệt? |
+|------|-----|-----|-----------|
+| **Import** | `from config import Config` | Giống hệT | ❌ KHÔNG |
+| **Device** | `Config.DEVICE` → `"cpu"` | `Config.DEVICE` → `"cuda"` | ✅ Tự động |
+| **Model** | `model.to(Config.DEVICE)` | `model.to(Config.DEVICE)` | ❌ GIỐNG HỆT |
+| **Data** | `X.to(Config.DEVICE)` | `X.to(Config.DEVICE)` | ❌ GIỐNG HỆT |
+| **Forward** | `output = model(X)` | `output = model(X)` | ❌ GIỐNG HỆT |
+| **Loss** | `loss = criterion(out, y)` | `loss = criterion(out, y)` | ❌ GIỐNG HỆT |
+| **Backward** | `loss.backward()` | `loss.backward()` | ❌ GIỐNG HỆT |
+
+---
+
+### 📊 Cho XGBoost & LightGBM
+
+Các library này **tự động detect GPU**, chỉ cần setting:
+
+```python
+import xgboost as xgb
+from config import Config
+
+# XGBoost - tự động dùng GPU nếu có
+use_gpu = Config.DEVICE.type == "cuda"
+
+model = xgb.XGBClassifier(
+    n_estimators=100,
+    tree_method='gpu_hist' if use_gpu else 'hist',  # ← 1 dòng
+    eval_metric='logloss'
+)
+
+# Training - GIỐNG HỆT!
+model.fit(X_train, y_train)
+```
+
+```python
+import lightgbm as lgb
+from config import Config
+
+# LightGBM - tự động dùng GPU
+model = lgb.LGBMClassifier(
+    device='gpu' if Config.DEVICE.type == "cuda" else 'cpu',  # ← 1 dòng
+    n_estimators=100
+)
+
+# Training - GIỐNG HỆT!
+model.fit(X_train, y_train)
+```
+
+---
+
+### 🚀 Best Practices
+
+✅ **NÊN LÀM:**
+```python
+# 1. Dùng Config.DEVICE mọi lúc
+model = model.to(Config.DEVICE)
+data = data.to(Config.DEVICE)
+
+# 2. Dùng helper functions từ config.py
+from config import to_device, create_dataloader
+
+X = to_device(X)
+loader = create_dataloader(dataset)
+
+# 3. Print config khi start
+Config.print_config()
+```
+
+❌ **KHÔNG NÊN:**
+```python
+# 1. Hard-code device
+model.to("cuda")  # ❌ Sẽ crash nếu không có GPU
+
+# 2. Check GPU nhiều lần
+if torch.cuda.is_available():  # ❌ Lặp lại không cần thiết
+    model.to("cuda")
+
+# 3. Quên .to(device)
+model = MyModel()
+X = X.to(device)
+output = model(X)  # ❌ Error: model on CPU, data on GPU!
+```
+
+---
+
+### 📋 Template Code Cho Dự Án
+
+```python
+# main.py - Template hoàn chỉnh
+import torch
+import polars as pl
+from config import Config, to_device
+
+# Print cấu hình
+Config.print_config()
+
+# Load data
+df = pl.read_csv("data/depression_scores.csv")
+X = torch.tensor(df.drop("label").to_numpy(), dtype=torch.float32)
+y = torch.tensor(df["label"].to_numpy(), dtype=torch.int64)
+
+# Move to device
+X = to_device(X)
+y = to_device(y)
+
+# Create model
+model = torch.nn.Sequential(
+    torch.nn.Linear(X.shape[1], Config.MODEL_PARAMS["hidden_dim"]),
+    torch.nn.ReLU(),
+    torch.nn.Dropout(Config.MODEL_PARAMS["dropout"]),
+    torch.nn.Linear(Config.MODEL_PARAMS["hidden_dim"], 2)
+)
+model = model.to(Config.DEVICE)  # ← Quan trọng!
+
+# Training loop
+optimizer = torch.optim.Adam(model.parameters(), lr=Config.MODEL_PARAMS["learning_rate"])
+criterion = torch.nn.CrossEntropyLoss()
+
+for epoch in range(Config.MODEL_PARAMS["epochs"]):
+    # Forward
+    predictions = model(X)
+    loss = criterion(predictions, y)
+    
+    # Backward
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+    
+    if epoch % 10 == 0:
+        print(f"Epoch {epoch}: Loss = {loss.item():.4f}")
+
+# Evaluation
+model.eval()
+with torch.no_grad():
+    preds = model(X)
+    accuracy = (preds.argmax(dim=1) == y).float().mean()
+    print(f"\n✅ Accuracy: {accuracy:.4f}")
+```
+
+---
+
+### 💡 Key Takeaways
+
+| Điểm | Giải Thích |
+|------|-----------|
+| **Chỉ 1-2 dòng thay đổi** | `.to(Config.DEVICE)` cho model và data |
+| **Training loop giống hệt** | Forward/backward/optimizer không đổi |
+| **Auto-detect** | Config.py tự động nhận GPU/CPU |
+| **No code duplication** | Không cần viết 2 versions CPU/GPU |
+| **Easy to maintain** | Change 1 variable → toàn bộ code adapt |
 
 ---
 
