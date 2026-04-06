@@ -5,23 +5,34 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "darts>=0.43.0",
-    "datashader>=0.19.0",
-    "duckdb>=1.5.1",
-    "factor-analyzer>=0.5.1",
-    "holoviews>=1.22.1",
-    "lifelines>=0.30.3",
-    "lightgbm>=4.6.0",
-    "neuralprophet>=0.5.0",
-    "optuna>=4.8.0",
-    "pingouin>=0.6.1",
-    "plotly>=6.6.0",
-    "polars",
+    # Data Processing
+    "polars>=1.39.0",
     "pyarrow>=23.0.1",
-    "statsmodels>=0.14.6",
-    "torch>=2.11.0",
-    "torchaudio>=2.11.0",
-    "torchvision>=0.26.0",
-    "vowpalwabbit>=9.11.2",
+    "duckdb>=1.5.1",
+    # Visualization
+    "plotly>=6.6.0",
+    "datashader>=0.19.0",
+    "holoviews>=1.22.1",
+    # Machine Learning (pinned versions compatible with Python 3.14)
     "xgboost>=3.2.0",
+    "lightgbm>=4.6.0",
+    "statsmodels>=0.14.6",
+    # numba must be pinned to 0.65.0+ for Python 3.14 support
+    # pingouin and factor-analyzer depend on numba
+    "numba>=0.65.0",
+    # Statistics
+    "factor-analyzer>=0.5.1",
+    "pingouin>=0.6.1",
+    # Hyperparameter Tuning
+    "optuna>=4.8.0",
+    # Survival Analysis
+    "lifelines>=0.30.3",
+    # Time Series
+    "darts>=0.43.0",
+    "neuralprophet>=0.5.0",
+    # Online Learning
+    "vowpalwabbit>=9.11.2",
+    "torch>=2.11.0",
+    "torchvision>=0.26.0",
+    "torchaudio>=2.11.0",
 ]
