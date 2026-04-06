@@ -15,7 +15,31 @@ Dự án này cung cấp một bộ công cụ hoàn chỉnh để phân tích t
 
 ---
 
+## 🏗️ Cấu Trúc Module
+
+```
+src/
+├── data_processing/          # Polars-based data processing
+├── visualization/            # Plotly interactive charts
+├── statistical_analysis/     # Pingouin, Statsmodels
+├── ml_models/                # XGBoost, LightGBM
+├── deep_learning/            # PyTorch neural networks
+├── evaluation/               # Model evaluation metrics
+└── utils/                    # Logging, timing, helpers
+```
+
+**📖 Chi tiết:** Đọc [USAGE.md](USAGE.md) và [ARCHITECTURE.md](ARCHITECTURE.md)
+
+---
+
 ## 🚀 Quick Start
+
+### Chạy Nhanh Nhất
+
+```bash
+# Pipeline hoàn chỉnh với sample data
+uv run python main.py --sample
+```
 
 ### Yêu Cầu
 
