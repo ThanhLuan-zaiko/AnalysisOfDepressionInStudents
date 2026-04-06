@@ -44,7 +44,7 @@ class StatisticalAnalyzer:
             DataFrame with: mean, std, median, min, max, skewness, kurtosis
         """
         if columns is None:
-            columns = df.select(pl.col(pl.NUMERIC_DTYPES)).columns
+            columns = df.select(pl.selectors.numeric()).columns
         
         stats_dict = {
             "column": [],
@@ -231,7 +231,7 @@ class StatisticalAnalyzer:
             method: "pearson", "spearman", "kendall"
         """
         if columns is None:
-            columns = df.select(pl.col(pl.NUMERIC_DTYPES)).columns
+            columns = df.select(pl.selectors.numeric()).columns
         
         df_pandas = df.select(columns).to_pandas()
         

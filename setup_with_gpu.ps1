@@ -307,6 +307,7 @@ $commonPackages = @(
     # Machine Learning
     "xgboost",
     "lightgbm",
+    "catboost",
     "statsmodels",
     "factor_analyzer",
     "pingouin",
@@ -403,7 +404,7 @@ if ($failedPackages.Count -gt 0) {
     Write-Host "Installed categories:" -ForegroundColor Cyan
     Write-Host "  📊 Data Processing: polars, pyarrow, duckdb" -ForegroundColor Gray
     Write-Host "  📈 Visualization: plotly, datashader, holoviews" -ForegroundColor Gray
-    Write-Host "  🤖 ML: xgboost, lightgbm, statsmodels" -ForegroundColor Gray
+    Write-Host "  🤖 ML: xgboost, lightgbm, catboost, statsmodels" -ForegroundColor Gray
     Write-Host "  📐 Statistics: factor_analyzer, pingouin, optuna" -ForegroundColor Gray
     Write-Host "  ⏱️  Time Series: darts, neuralprophet" -ForegroundColor Gray
     Write-Host "  🔄 Online ML: vowpalwabbit (faster than river)" -ForegroundColor Gray

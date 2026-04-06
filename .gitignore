@@ -41,3 +41,26 @@ Thumbs.db
 *.pptx
 *.html
 *.log
+*.json
+
+# Lock file (must be committed)
+!uv.lock
+
+# Model binaries (do NOT commit)
+*.pkl
+*.pth
+*.onnx
+*.joblib
+*.bin
+models/
+
+# CatBoost training artifacts (auto-generated during training)
+catboost_info/
+catboost_training.log
+*.tfevents
+*.jsonl
+*.tsv
+
+# Generated data artifacts (auto-generated, do NOT commit)
+results/
+logs/

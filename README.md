@@ -20,13 +20,24 @@ Dự án này cung cấp một bộ công cụ hoàn chỉnh để phân tích t
 ```
 src/
 ├── data_processing/          # Polars-based data processing
-├── visualization/            # Plotly interactive charts
+├── visualization/            # Plotly interactive charts + EDA
+│   └── plots.py              #   + ExploratoryAnalyzer
 ├── statistical_analysis/     # Pingouin, Statsmodels
-├── ml_models/                # XGBoost, LightGBM
-├── deep_learning/            # PyTorch neural networks
+├── ml_models/                # Risk modeling
+│   ├── risk_model.py         #   ★ Logistic Regression + CatBoost + Fairness
+│   ├── predictor.py          #   XGBoost/LightGBM (legacy)
+│   ├── optimizer.py          #   Optuna hyperparameter tuning
+│   ├── explainer.py          #   SHAP explainability
+│   └── imbalanced.py         #   SMOTE handling
 ├── evaluation/               # Model evaluation metrics
 └── utils/                    # Logging, timing, helpers
 ```
+
+**Phương pháp hiện tại:**
+- **Logistic Regression** (trung tâm) — dễ giải thích, báo cáo odds ratio
+- **CatBoost** (dự báo bổ sung) — mạnh nhất trên dữ liệu bảng hỗn hợp
+- **Fairness analysis** theo Gender, Age group, Family History
+- **Threshold optimization** — chọn ngưỡng phù hợp bài toán sàng lọc
 
 **📖 Chi tiết:** Đọc [USAGE.md](USAGE.md) và [ARCHITECTURE.md](ARCHITECTURE.md)
 
@@ -104,7 +115,8 @@ uv run python config.py
 
 | Package | Là Gì? | Dùng Để Làm Gì? |
 |---------|---------|-----------------|
-| **[XGBoost](https://xgboost.readthedocs.io/)** | Gradient Boosting | Mô hình dự đoán trầm cảm chính xác nhất |
+| **[CatBoost](https://catboost.ai/)** | Gradient Boosting | **Mô hình dự báo chính** — xử lý tốt dữ liệu bảng hỗn hợp, tự động xử lý biến phân loại |
+| **[XGBoost](https://xgboost.readthedocs.io/)** | Gradient Boosting | Mô hình dự đoán trầm cảm |
 | **[LightGBM](https://lightgbm.readthedocs.io/)** | Gradient Boosting nhanh | Training nhanh hơn XGBoost |
 | **[Statsmodels](https://www.statsmodels.org/)** | Mô hình thống kê | Hồi quy, kiểm định, phân tích phương sai |
 | **[Factor Analyzer](https://github.com/EducationalTestingService/factor_analyzer)** | Phân tích nhân tố | Tìm yếu tố tiềm ẩn (stress, lo âu, cô đơn) |
@@ -231,25 +243,186 @@ Bước 6: Auto-fix nếu driver không khớp
 
 ## 🏃 Cách Chạy
 
-### 3 Cách Chạy Chương Trình
+### Chi tiết 7 chế độ chạy của `main.py`
 
-#### Cách 1: `uv run` (Khuyến Nghị)
+#### 1. Không flag (mặc định) = `--eda`
+
 ```bash
 uv run python main.py
-uv run python config.py       # Xem device info
-uv run python verify_gpu.py   # Kiểm tra GPU
 ```
 
-#### Cách 2: Activate Venv
-```powershell
-.venv\Scripts\Activate.ps1
-python main.py
+**Chạy:** Giai đoạn 0 (cảnh báo đạo đức) + Giai đoạn 1 (EDA) + Giai đoạn 2-3 (rà soát dữ liệu)
+
+| Giai đoạn | Nội dung | Output |
+|-----------|----------|--------|
+| **0** | Cảnh báo đạo đức & giới hạn sử dụng | In console |
+| **1** | EDA — 6 biểu đồ HTML | `results/visualizations/eda_*.html` + `eda_data_profile.json` |
+| **2-3** | Rà soát dữ liệu — loại cột hằng, missing, rare categories | In console |
+
+**Không chạy:** Thống kê, mô hình ML, fairness, threshold
+
+**Dùng khi:** Mới mở dataset lần đầu, muốn hiểu dữ liệu trước khi làm gì tiếp. ~2-3 giây.
+
+---
+
+#### 2. `--eda` (tường minh)
+
+```bash
+uv run python main.py --eda
 ```
 
-#### Cách 3: Chạy script setup
-```powershell
-.\setup_with_gpu.ps1
+**Giống hệt không flag.** Chỉ khác là viết rõ ràng hơn trong script/automation.
+
+---
+
+#### 3. `--stats`
+
+```bash
+uv run python main.py --stats
 ```
+
+**Chạy:** Giai đoạn 0 + Giai đoạn 2-3 + Giai đoạn 4 (thống kê mô tả theo nhóm trầm cảm)
+
+| Giai đoạn | Nội dung | Output |
+|-----------|----------|--------|
+| **0** | Cảnh báo đạo đức | In console |
+| **2-3** | Rà soát dữ liệu | In console |
+| **4** | Thống kê mô tả theo nhóm (mean, std, min, max cho từng biến số, tách Depression=0 vs 1) | In console — bảng polars |
+
+**Không chạy:** EDA (không sinh biểu đồ), mô hình ML
+
+**Dùng khi:** Cần số liệu thống kê nhanh để viết báo cáo, không cần biểu đồ hay mô hình. ~5-10 giây.
+
+---
+
+#### 4. `--models`
+
+```bash
+uv run python main.py --models
+```
+
+**Chạy:** Giai đoạn 0 + Giai đoạn 2-3 + Giai đoạn 7-8-9 (mô hình + fairness + threshold)
+
+| Giai đoạn | Nội dung | Output |
+|-----------|----------|--------|
+| **0** | Cảnh báo đạo đức | In console |
+| **2-3** | Rà soát dữ liệu | In console |
+| **7-8** | Huấn luyện 3 mô hình (Dummy, Logistic Regression, CatBoost) | `results/model_results_full.json` |
+| **9** | Fairness analysis — ROC-AUC, FPR, FNR theo Gender, Age group, Family History | In console — cảnh báo bias |
+| **8b** | Threshold analysis — thử 30 ngưỡng (0.20→0.80), khuyến nghị ngưỡng tối ưu | In console — khuyến nghị |
+
+**Không chạy:** EDA (không sinh biểu đồ), thống kê mô tả (Giai đoạn 4)
+
+**Dùng khi:** Đã có EDA rồi, giờ muốn xây dựng mô hình và đánh giá. ~15-25 giây.
+
+---
+
+#### 5. `--full`
+
+```bash
+uv run python main.py --full
+```
+
+**Chạy: TẤT CẢ** — Giai đoạn 0 → 1 → 2-3 → 4 → 7-8-9
+
+| Giai đoạn | Nội dung | Output |
+|-----------|----------|--------|
+| **0** | Cảnh báo đạo đức | In console |
+| **1** | EDA — 6 biểu đồ | 6 file HTML + 1 JSON |
+| **2-3** | Rà soát dữ liệu | In console |
+| **4** | Thống kê mô tả theo nhóm | In console |
+| **7-8** | 3 mô hình | `results/model_results_full.json` |
+| **9** | Fairness analysis | In console |
+| **8b** | Threshold analysis | In console |
+
+**Dùng khi:** Muốn chạy trọn vẹn từ đầu đến cuối — sinh báo cáo hoàn chỉnh. ~20-40 giây.
+
+---
+
+#### 6. `--leakage`
+
+```bash
+uv run python main.py --leakage
+```
+
+**Chạy:** Giai đoạn 0 + Điều tra rò rỉ nhãn (label leakage) từ biến `Suicidal thoughts`
+
+| Giai đoạn | Nội dung | Output |
+|-----------|----------|--------|
+| **0** | Cảnh báo đạo đức | In console |
+| **Leakage** | 4 phân tích: Odds Ratio, Stress Test (rò rỉ từng hàng), Cross-Tab, Synthetic Check | `results/leakage_investigation.json` + console |
+
+**Không chạy:** EDA, thống kê mô tả, mô hình ML
+
+**Dùng khi:** Muốn đánh giá rủi ro rò rỉ nhãn trước khi quyết định đưa biến `Suicidal thoughts` vào mô hình. ~5-10 giây.
+
+**Kết quả bao gồm:**
+- **Odds Ratio** — mức độ liên quan giữa Suicidal thoughts và Depression
+- **Stress Test** — phát hiện hàng cụ thể bị rò rỉ nhãn
+- **Cross-Tabulation** — bảng chéo Suicidal × Depression
+- **Synthetic Check** — kiểm tra xem biến có phải là "proxy" cho nhãn không
+
+⚠️ Nếu Odds Ratio > 10 → **nguy cơ cao** rò rỉ nhãn, cần cân nhắc Phiên bản A (không có biến này).
+
+---
+
+#### 7. `--no-ethical`
+
+```bash
+uv run python main.py --models --no-ethical
+```
+
+**Tác dụng duy nhất:** Bỏ qua phần in cảnh báo đạo đức ở Giai đoạn 0.
+
+**Không thay đổi:** Mọi thứ khác (EDA, stats, models, fairness, threshold) chạy y hệt.
+
+**Dùng khi:** Chạy script tự động, CI/CD, hoặc đã quá quen thuộc và không muốn đọc cảnh báo mỗi lần.
+
+**⚠️ Không khuyến nghị** vì cảnh báo đạo đức là phần cốt lõi định hướng triết lý của dự án.
+
+---
+
+### Bảng tổng hợp
+
+| Flag | EDA (biểu đồ) | Stats | Models | Fairness | Threshold | Leakage | Thời gian ~ |
+|------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| *(không flag)* | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
+| `--eda` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
+| `--stats` | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | 5-10s |
+| `--models` | ❌ | ❌ | ✅ | ✅ | ✅ | ❌ | 15-25s |
+| `--leakage` | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | 5-10s |
+| `--full` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | 20-40s |
+| `--no-ethical` | — | — | — | — | — | — | Bỏ cảnh báo |
+
+### Flag bổ trợ
+
+| Flag | Tác dụng | Dùng với |
+|------|----------|----------|
+| `--conservative` | Dùng **Phiên bản A** — không có biến `Suicidal thoughts` (an toàn, không rủi ro rò rỉ nhãn) | `--models`, `--full` |
+| `--no-ethical` | Bỏ qua cảnh báo đạo đức ở Giai đoạn 0 | Mọi flag |
+
+**Ví dụ:**
+```bash
+uv run python main.py --models --conservative    # Huấn luyện Phiên bản A
+uv run python main.py --full --conservative      # Toàn bộ pipeline, Phiên bản A
+```
+
+### File khác
+
+```bash
+uv run python config.py       # Xem device info (CPU/GPU)
+uv run python verify_gpu.py   # Kiểm tra GPU hoạt động
+```
+
+### Mô hình mặc định: Phiên bản B (Đầy đủ)
+
+Pipeline mặc định dùng **Phiên bản B** — có biến `Have you ever had suicidal thoughts ?`.
+Đây là phiên bản có hiệu năng cao nhất nhưng cần lưu ý nguy cơ rò rỉ nhãn
+(OR = 12.388 cho biến này).
+
+**Ngưỡng khuyến nghị:**
+- **Logistic Regression**: threshold = 0.36 (Recall = 0.91, FNR = 9.2%)
+- **CatBoost**: threshold = 0.38 (Recall = 0.92, FNR = 8.0%)
 
 ---
 
@@ -418,18 +591,30 @@ result = df.filter(pl.col("score") > 10).collect()
 
 ## 📝 Lưu Ý Quan Trọng
 
-1. **Python 3.14**: Dự án dùng Python 3.14. Một số packages cũ có thể cần build từ source.
+1. **Tiếp cận đạo đức**: Dự án này **KHÔNG** nhằm chẩn đoán trầm cảm.
+   Mô hình là công cụ **HỖ TRỢ sàng lọc**, không thay thế đánh giá lâm sàng.
+   Đọc `SCIENTIFIC_ANALYSIS_PLAN.md` để hiểu triết lý và giới hạn sử dụng.
 
-2. **GPU Support**:
+2. **Phiên bản mô hình mặc định**: Phiên bản B (có `Suicidal thoughts`).
+   Biến này có **OR = 12.388** — nguy cơ rò rỉ nhãn.
+   Nếu muốn dùng phiên bản an toàn hơn, sửa `main.py` → `include_suicidal=False`.
+
+3. **Python 3.14**: Dự án dùng Python 3.14. Một số packages cũ có thể cần build từ source.
+
+4. **GPU Support**:
    - **NVIDIA**: Hoạt động tốt nhất (CUDA)
    - **AMD**: Cần WSL2 trên Windows
    - **Intel**: Hỗ trợ hạn chế
 
-3. **Windows + SAC**: Smart App Control có thể chặn Python 3.14. Script tự động unblock nhưng nếu vẫn lỗi, cần tắt SAC thủ công.
+5. **Windows + SAC**: Smart App Control có thể chặn Python 3.14.
+   Script tự động unblock nhưng nếu vẫn lỗi, cần tắt SAC thủ công.
 
-4. **uv.lock**: Luôn commit file này để đảm bảo reproducibility.
+6. **uv.lock**: Luôn commit file này để đảm bảo reproducibility.
 
-5. **VowpalWabbit**: Thay thế cho River (không tương thích Python 3.14).
+7. **VowpalWabbit**: Thay thế cho River (không tương thích Python 3.14).
+
+8. **Dữ liệu không commit**: File `*.csv`, `results/`, `logs/`, `models/`
+   đều nằm trong `.gitignore` — tự sinh lại được.
 
 ---
 

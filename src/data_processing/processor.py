@@ -103,7 +103,7 @@ class DataProcessor:
         logger.info(f"Missing values before cleaning:\n{null_counts}")
         
         # Fill numeric columns with median
-        numeric_cols = df.select(pl.col(pl.NUMERIC_DTYPES)).columns
+        numeric_cols = df.select(pl.selectors.numeric()).columns
         
         if numeric_cols:
             for col in numeric_cols:
