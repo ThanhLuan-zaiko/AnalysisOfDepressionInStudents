@@ -177,29 +177,79 @@ def run_data_review(df: pl.DataFrame) -> dict:
             "cần stratified split và class weights."
         )
 
-    # In báo cáo
+    # In báo cáo chi tiết
+    print()
+    print("=" * 80)
+    print(" 📋 BÁO CÁO RÀ SOÁT DỮ LIỆU")
+    print("=" * 80)
+
+    # 1. Tổng quan
     print(f"\n  Shape gốc:        {review['original_shape']}")
     print(f"  Shape sau lọc:    {df_review.shape}")
-    print(f"  Cột đã loại:      {review['columns_dropped']}")
 
+    # 2. Biến hằng số / phương sai thấp
+    if review["columns_dropped"]:
+        print(f"\n  🚫 Biến đã loại (phương sai quá thấp / định danh):")
+        for col in review["columns_dropped"]:
+            if col in df.columns:
+                vc = df[col].value_counts().sort("count", descending=True)
+                top_row = vc.row(0, named=True)
+                top_val = top_row[col]
+                top_count = top_row["count"]
+                top_pct = top_count / df.height * 100
+                n_unique = df[col].n_unique()
+                print(f"    • {col}: {n_unique} unique, '{top_val}' chiếm {top_pct:.1f}%")
+
+    # 3. Biến gần-hằng-số (gợi ý loại thêm)
+    near_constant = []
+    for col in df_review.columns:
+        if col in ["Depression"]:
+            continue
+        n_unique = df_review[col].n_unique()
+        if n_unique <= 2:
+            vc = df_review[col].value_counts().sort("count", descending=True)
+            top_row = vc.row(0, named=True)
+            top_pct = top_row["count"] / df_review.height * 100
+            if top_pct > 95:
+                near_constant.append({
+                    "column": col,
+                    "unique": n_unique,
+                    "top_value": str(top_row[col]),
+                    "top_pct": round(top_pct, 1),
+                })
+
+    if near_constant:
+        print(f"\n  ⚠️  Biến gần-hằng-số (gợi ý xem xét loại):")
+        for info in near_constant:
+            print(f"    • {info['column']}: '{info['top_value']}' = {info['top_pct']}%")
+
+    # 4. Missing values
     if review["missing_values"]:
         print(f"\n  ⚠️  Missing values:")
         for col, count in review["missing_values"].items():
-            print(f"    {col}: {count}")
+            pct = count / df_review.height * 100
+            print(f"    • {col}: {count:,} ({pct:.1f}%)")
     else:
         print(f"\n  ✅ Không có missing values")
 
+    # 5. Rare categories
     if review["rare_categories"]:
         print(f"\n  ⚠️  Rare categories (< 1%):")
         for col, cats in review["rare_categories"].items():
             for cat in cats:
-                print(f"    {col}: '{cat['category']}' ({cat['count']} = {cat['pct']}%)")
+                print(f"    • {col}: '{cat['category']}' ({cat['count']} = {cat['pct']}%)")
 
+    # 6. Cảnh báo
     if review["warnings"]:
-        print(f"\n  ⚠️  Cảnh báo:")
+        print(f"\n  🔔 Cảnh báo:")
         for w in review["warnings"]:
             print(f"    • {w}")
 
+    # 7. Danh sách cột giữ lại
+    print(f"\n  ✅ Biến giữ lại để phân tích ({len(review['columns_kept'])}):")
+    print(f"     {', '.join(review['columns_kept'])}")
+
+    print()
     return review
 
 
@@ -227,6 +277,7 @@ def main(
     run_stats: bool = False,
     run_models: bool = False,
     run_leakage: bool = False,
+    run_review: bool = False,
     conservative: bool = False,
 ):
     """
@@ -253,7 +304,7 @@ def main(
 
     # ---- Giai đoạn 2-3: Data review ----
     review = None
-    if run_eda_flag or run_stats or run_models or run_leakage:
+    if run_review or run_eda_flag or run_stats or run_models or run_leakage:
         with Timer("Data Review"):
             review = run_data_review(df)
 
@@ -436,11 +487,13 @@ if __name__ == "__main__":
                         help="Bỏ qua cảnh báo đạo đức (không khuyến nghị)")
     parser.add_argument("--conservative", action="store_true",
                         help="Dùng Phiên bản A — không có 'Suicidal thoughts'")
+    parser.add_argument("--review", action="store_true",
+                        help="Giai đoạn 2-3: Rà soát dữ liệu, phát hiện biến hằng số, missing, rare categories")
 
     args = parser.parse_args()
 
     # Default: nếu không có flag nào → chạy EDA
-    any_flag = args.eda or args.stats or args.models or args.leakage or args.full
+    any_flag = args.eda or args.stats or args.models or args.leakage or args.full or args.review
 
     try:
         if args.full:
@@ -449,6 +502,7 @@ if __name__ == "__main__":
                 run_eda_flag=True,
                 run_stats=True,
                 run_models=True,
+                run_review=True,
                 conservative=args.conservative,
             )
         elif any_flag:
@@ -458,6 +512,7 @@ if __name__ == "__main__":
                 run_stats=args.stats,
                 run_models=args.models,
                 run_leakage=args.leakage,
+                run_review=args.review,
                 conservative=args.conservative,
             )
         else:

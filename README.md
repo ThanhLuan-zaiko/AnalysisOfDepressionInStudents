@@ -243,7 +243,7 @@ Bước 6: Auto-fix nếu driver không khớp
 
 ## 🏃 Cách Chạy
 
-### Chi tiết 7 chế độ chạy của `main.py`
+### Chi tiết 8 chế độ chạy của `main.py`
 
 #### 1. Không flag (mặc định) = `--eda`
 
@@ -339,7 +339,33 @@ uv run python main.py --full
 
 ---
 
-#### 6. `--leakage`
+#### 6. `--review`
+
+```bash
+uv run python main.py --review
+```
+
+**Chạy:** Giai đoạn 0 + Giai đoạn 2-3 (rà soát dữ liệu chi tiết)
+
+| Giai đoạn | Nội dung | Output |
+|-----------|----------|--------|
+| **0** | Cảnh báo đạo đức | In console |
+| **2-3** | Rà soát dữ liệu — biến hằng số, biến gần-hằng-số, missing, rare categories | In console — báo cáo chi tiết |
+
+**Không chạy:** EDA (không sinh biểu đồ), thống kê mô tả, mô hình ML
+
+**Dùng khi:** Mới mở dataset lần đầu, muốn kiểm tra chất lượng dữ liệu trước khi quyết định phân tích gì tiếp. ~2-3 giây.
+
+**Báo cáo bao gồm:**
+- **Biến đã loại** — cột phương sai quá thấp / định danh (Profession, Work Pressure, ...)
+- **Biến gần-hằng-số** — gợi ý xem xét loại thêm (>95% cùng 1 giá trị)
+- **Missing values** — cột nào thiếu, bao nhiêu dòng, tỷ lệ %
+- **Rare categories** — category xuất hiện <1% trong dữ liệu
+- **Cảnh báo** — class imbalance, rò rỉ nhãn, ...
+
+---
+
+#### 7. `--leakage`
 
 ```bash
 uv run python main.py --leakage
@@ -384,15 +410,16 @@ uv run python main.py --models --no-ethical
 
 ### Bảng tổng hợp
 
-| Flag | EDA (biểu đồ) | Stats | Models | Fairness | Threshold | Leakage | Thời gian ~ |
-|------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| *(không flag)* | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
-| `--eda` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
-| `--stats` | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | 5-10s |
-| `--models` | ❌ | ❌ | ✅ | ✅ | ✅ | ❌ | 15-25s |
-| `--leakage` | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | 5-10s |
-| `--full` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | 20-40s |
-| `--no-ethical` | — | — | — | — | — | — | Bỏ cảnh báo |
+| Flag | EDA (biểu đồ) | Stats | Models | Fairness | Threshold | Leakage | Review | Thời gian ~ |
+|------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| *(không flag)* | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
+| `--eda` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
+| `--review` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | 2-3s |
+| `--stats` | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | 5-10s |
+| `--models` | ❌ | ❌ | ✅ | ✅ | ✅ | ❌ | ❌ | 15-25s |
+| `--leakage` | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | 5-10s |
+| `--full` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | 20-40s |
+| `--no-ethical` | — | — | — | — | — | — | — | Bỏ cảnh báo |
 
 ### Flag bổ trợ
 
