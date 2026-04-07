@@ -364,29 +364,203 @@ def main(
 
 
 def run_statistical_analysis(df: pl.DataFrame):
-    """Giai đoạn 4: EDA + kiểm định thống kê."""
-    from src.statistical_analysis import StatisticalAnalyzer
+    """Giai đoạn 4: Kiểm định thống kê + cỡ ảnh hưởng (effect size)."""
+    import pingouin as pg
+    import pandas as pd
 
     print("\n" + "=" * 80)
-    print(" 📊 GIAI ĐOẠN 4: KIỂM ĐỊNH THỐNG KÊ")
+    print(" 📊 GIAI ĐOẠN 4: KIỂM ĐỊNH THỐNG KÊ + CỠ ẢNH HƯỞNG")
     print("=" * 80)
 
     # Loại cột không cần thiết
-    df_analysis = df.drop([c for c in EXCLUDED_COLUMNS if c in df.columns])
+    df_a = df.drop([c for c in EXCLUDED_COLUMNS if c in df.columns])
 
-    analyzer = StatisticalAnalyzer()
+    # ============================================================
+    # 1. Thống kê mô tả theo nhóm Trầm cảm
+    # ============================================================
+    print("\n" + "=" * 60)
+    print(" 1️⃣  THỐNG KÊ MÔ TẢ THEO NHÓM TRẦM CẢM")
+    print("=" * 60)
 
-    # Descriptive statistics theo nhóm Depression
-    if "Depression" in df_analysis.columns:
-        print("\n📋 Thống kê mô tả theo nhóm Trầm cảm:")
-        for dep_val in df_analysis["Depression"].unique():
-            label = "Có trầm cảm" if dep_val == 1 else "Không trầm cảm"
-            subset = df_analysis.filter(pl.col("Depression") == dep_val)
-            print(f"\n  --- {label} (Depression={dep_val}) ---")
-            numeric_cols = subset.select(pl.selectors.numeric()).columns
-            if numeric_cols:
-                desc = subset.select(numeric_cols).describe()
-                print(desc)
+    n_total = df_a.height
+    n_dep = df_a.filter(pl.col("Depression") == 1).height
+    n_nodep = df_a.filter(pl.col("Depression") == 0).height
+    print(f"\n  Tổng: {n_total:,} | Có TC: {n_dep:,} ({n_dep/n_total*100:.1f}%) | Không TC: {n_nodep:,} ({n_nodep/n_total*100:.1f}%)")
+
+    # Numeric variables
+    numeric_cols = [c for c in df_a.select(pl.selectors.numeric()).columns if c != "Depression"]
+    if numeric_cols:
+        print(f"\n  {'Biến':<40s} {'Nhóm':>6s} {'Mean':>8s} {'SD':>8s} {'Median':>8s} {'Min':>6s} {'Max':>6s}")
+        print(f"  {'─'*40} {'─'*6} {'─'*8} {'─'*8} {'─'*8} {'─'*6} {'─'*6}")
+        for col in numeric_cols:
+            for dep_val, label in [(0, "Không"), (1, "Có TC")]:
+                subset = df_a.filter(pl.col("Depression") == dep_val)[col].drop_nulls()
+                if len(subset) == 0:
+                    continue
+                m = subset.mean()
+                s = subset.std()
+                med = subset.median()
+                mn = subset.min()
+                mx = subset.max()
+                label_short = f"{col}" if dep_val == 0 else ""
+                if dep_val == 0:
+                    print(f"  {col:<40s} {label:>6s} {m:>8.2f} {s:>8.2f} {med:>8.2f} {mn:>6.0f} {mx:>6.0f}")
+                else:
+                    print(f"  {'':<40s} {label:>6s} {m:>8.2f} {s:>8.2f} {med:>8.2f} {mn:>6.0f} {mx:>6.0f}")
+            print()
+
+    # ============================================================
+    # 2. Kiểm định: Numeric variables (Mann-Whitney U / t-test)
+    # ============================================================
+    print("\n" + "=" * 60)
+    print(" 2️⃣  SO SÁNH BIẾN SỐ GIỮA 2 NHÓM TRẦM CẢM")
+    print("=" * 60)
+
+    df_pd = df_a.to_pandas()
+
+    print(f"\n  {'Biến':<40s} {'Test':>14s} {'U':>10s} {'p':>10s} {"Cohen d":>10s} {'RBC':>10s} {'Ý nghĩa':>10s}")
+    print(f"  {'─'*40} {'─'*14} {'─'*10} {'─'*10} {'─'*10} {'─'*10} {'─'*10}")
+
+    for col in numeric_cols:
+        try:
+            group0 = df_pd[df_pd["Depression"] == 0][col].dropna()
+            group1 = df_pd[df_pd["Depression"] == 1][col].dropna()
+
+            # Mann-Whitney U
+            u_test = pg.mwu(x=group0, y=group1)
+            u_val = u_test["U_val"].values[0]
+            p_val = u_test["p_val"].values[0]
+
+            # Cohen's d
+            from pingouin.effsize import compute_effsize
+            cohend = compute_effsize(group1, group0, eftype="cohen")
+
+            # RBC (rank-biserial correlation) as effect size alternative
+            rbc = u_test["RBC"].values[0] if "RBC" in u_test.columns else float("nan")
+            rbc_str = f"{rbc:>8.3f}" if not np.isnan(rbc) else "       -"
+
+            sig = "***" if p_val < 0.001 else "**" if p_val < 0.01 else "*" if p_val < 0.05 else "ns"
+
+            abs_d = abs(cohend)
+            if abs_d < 0.2:
+                es_label = "Rất nhỏ"
+            elif abs_d < 0.5:
+                es_label = "Nhỏ"
+            elif abs_d < 0.8:
+                es_label = "TB"
+            else:
+                es_label = "LỚN"
+
+            print(f"  {col:<40s} {'Mann-Whitney':>14s} {u_val:>10.0f} {p_val:>10.4f} {cohend:>10.3f} {rbc_str:>10s} {sig:>4s} [{es_label}]")
+        except Exception as e:
+            print(f"  {col:<40s} {'ERROR':>14s} {str(e)[:30]:>30s}")
+
+    print(f"\n  Chú thích: p < 0.05 (*), < 0.01 (**), < 0.001 (***); ns = không ý nghĩa")
+    print(f"  Cohen d: <0.2 rất nhỏ, <0.5 nhỏ, <0.8 trung bình, >=0.8 LỚN")
+    print(f"  RBC: Rank-biserial correlation (effect size phi hạng)")
+
+    # ============================================================
+    # 3. Kiểm định: Categorical variables (Chi-square + Cramer's V)
+    # ============================================================
+    print("\n" + "=" * 60)
+    print(" 3️⃣  LIÊN HỆ BIẾN PHÂN LOẠI VỚI TRẦM CẢM (Chi-square)")
+    print("=" * 60)
+
+    cat_cols = [c for c in df_a.select(pl.col(pl.String)).columns if c != "Depression"]
+
+    print(f"\n  {'Biến':<40s} {'χ²':>10s} {'df':>6s} {'p':>10s} {"Cramer V":>10s} {'OR (max)':>10s} {'Ý nghĩa':>10s}")
+    print(f"  {'─'*40} {'─'*10} {'─'*6} {'─'*10} {'─'*10} {'─'*10} {'─'*10}")
+
+    for col in cat_cols:
+        try:
+            # Chi-square test (scipy)
+            from scipy.stats import chi2_contingency
+            ct = pd.crosstab(df_pd[col], df_pd["Depression"])
+            chi2_stat, p_val, dof, expected = chi2_contingency(ct)
+
+            # Cramer's V
+            n = ct.sum().sum()
+            phi2 = chi2_stat / n
+            k = min(ct.shape) - 1
+            cramers_v = np.sqrt(phi2 / k) if k > 0 else 0.0
+
+            # Odds Ratio: lấy mức có OR lớn nhất (so với reference = hàng đầu)
+            if ct.shape[1] == 2:
+                or_values = []
+                ref_a = ct.iloc[0, 1] + 0.5
+                ref_b = ct.iloc[0, 0] + 0.5
+                for i in range(ct.shape[0]):
+                    a = ct.iloc[i, 1] + 0.5
+                    b = ct.iloc[i, 0] + 0.5
+                    if i == 0:
+                        or_values.append(1.0)
+                    else:
+                        or_values.append((a * ref_b) / (b * ref_a))
+                max_or = max(or_values) if or_values else float("nan")
+                min_or = min(or_values) if or_values else float("nan")
+                # Report the more extreme OR
+                max_or = max(abs(max_or), abs(min_or)) if min_or < 1 else max_or
+            else:
+                max_or = float("nan")
+
+            sig = "***" if p_val < 0.001 else "**" if p_val < 0.01 else "*" if p_val < 0.05 else "ns"
+            or_str = f"{max_or:>8.2f}" if not np.isnan(max_or) else "       -"
+
+            abs_v = abs(cramers_v)
+            if abs_v < 0.1:
+                es_label = "Rất nhỏ"
+            elif abs_v < 0.3:
+                es_label = "Nhỏ"
+            elif abs_v < 0.5:
+                es_label = "TB"
+            else:
+                es_label = "LỚN"
+
+            print(f"  {col:<40s} {chi2_stat:>10.2f} {dof:>6d} {p_val:>10.4f} {cramers_v:>10.3f} {or_str:>10s} {sig:>4s} [{es_label}]")
+        except Exception as e:
+            print(f"  {col:<40s} {'ERROR':>14s} {str(e)[:30]:>30s}")
+
+    print(f"\n  Chú thích: Cramer's V: <0.1 rất nhỏ, <0.3 nhỏ, <0.5 trung bình, >=0.5 LỚN")
+
+    # ============================================================
+    # 4. Tương quan giữa các biến số
+    # ============================================================
+    print("\n" + "=" * 60)
+    print(" 4️⃣  TƯƠNG QUAN VỚI BIẾN TRẦM CẢM (Spearman)")
+    print("=" * 60)
+
+    if len(numeric_cols) >= 2:
+        print(f"\n  {'Biến':<40s} {'rho':>8s} {'p':>10s} {'n':>8s} {'95% CI':>18s} {'Ý nghĩa':>10s}")
+        print(f"  {'─'*40} {'─'*8} {'─'*10} {'─'*8} {'─'*18} {'─'*10}")
+
+        for col in numeric_cols:
+            try:
+                corr = pg.corr(
+                    x=df_pd[col],
+                    y=df_pd["Depression"],
+                    method="spearman"
+                )
+                rho = corr["r"].values[0]
+                p_val = corr["p_val"].values[0]
+                n = corr["n"].values[0]
+                ci = corr["CI95"].values[0]
+                ci_str = f"[{ci[0]:.2f}, {ci[1]:.2f}]"
+
+                sig = "***" if p_val < 0.001 else "**" if p_val < 0.01 else "*" if p_val < 0.05 else "ns"
+
+                abs_r = abs(rho)
+                if abs_r < 0.1:
+                    es_label = "Rất nhỏ"
+                elif abs_r < 0.3:
+                    es_label = "Nhỏ"
+                elif abs_r < 0.5:
+                    es_label = "TB"
+                else:
+                    es_label = "MẠNH"
+
+                print(f"  {col:<40s} {rho:>8.3f} {p_val:>10.4f} {n:>8.0f} {ci_str:>18s} {sig:>4s} [{es_label}]")
+            except Exception as e:
+                print(f"  {col:<40s} {'ERROR':>14s} {str(e)[:30]:>30s}")
 
 
 def run_leakage_investigation(df: pl.DataFrame):

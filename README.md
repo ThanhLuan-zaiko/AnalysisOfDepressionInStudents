@@ -281,17 +281,25 @@ uv run python main.py --eda
 uv run python main.py --stats
 ```
 
-**Chạy:** Giai đoạn 0 + Giai đoạn 2-3 + Giai đoạn 4 (thống kê mô tả theo nhóm trầm cảm)
+**Chạy:** Giai đoạn 0 + Giai đoạn 2-3 + Giai đoạn 4 (kiểm định thống kê + cỡ ảnh hưởng)
 
 | Giai đoạn | Nội dung | Output |
 |-----------|----------|--------|
 | **0** | Cảnh báo đạo đức | In console |
 | **2-3** | Rà soát dữ liệu | In console |
-| **4** | Thống kê mô tả theo nhóm (mean, std, min, max cho từng biến số, tách Depression=0 vs 1) | In console — bảng polars |
+| **4** | **Thống kê mô tả** theo nhóm (mean, SD, median, min, max) | Bảng |
+| | **Mann-Whitney U** — so sánh biến số giữa 2 nhóm | U, p, Cohen d, RBC |
+| | **Chi-square** — liên hệ biến phân loại với trầm cảm | χ², df, p, Cramer's V, OR |
+| | **Tương quan Spearman** — mức độ liên quan của từng biến | rho, p, 95% CI |
 
 **Không chạy:** EDA (không sinh biểu đồ), mô hình ML
 
-**Dùng khi:** Cần số liệu thống kê nhanh để viết báo cáo, không cần biểu đồ hay mô hình. ~5-10 giây.
+**Dùng khi:** Cần phân tích thống kê đầy đủ để viết báo cáo — có cả **kiểm định ý nghĩa** (p-value) và **cỡ ảnh hưởng** (effect size: Cohen d, Cramer's V, Odds Ratio). ~5-10 giây.
+
+**Ngưỡng đánh giá effect size:**
+- **Cohen d**: <0.2 rất nhỏ, <0.5 nhỏ, <0.8 trung bình, ≥0.8 LỚN
+- **Cramer's V**: <0.1 rất nhỏ, <0.3 nhỏ, <0.5 trung bình, ≥0.5 LỚN
+- **Odds Ratio**: ~1 = không liên quan, >2 = liên quan đáng kể, >5 = rất mạnh
 
 ---
 
