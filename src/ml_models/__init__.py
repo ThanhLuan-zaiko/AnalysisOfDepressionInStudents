@@ -15,6 +15,7 @@ from .imbalanced import ImbalancedDataHandler
 from .risk_model import DepressionRiskModeler
 from .leakage_check import LabelLeakageInvestigator
 from .famd import FAMDAnalyzer
+from .stratified_split import StratifiedSplitter
 
 __all__ = [
     "DepressionPredictor",
@@ -24,4 +25,5 @@ __all__ = [
     "DepressionRiskModeler",
     "LabelLeakageInvestigator",
     "FAMDAnalyzer",
+    "StratifiedSplitter",
 ]

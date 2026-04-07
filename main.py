@@ -280,6 +280,7 @@ def main(
     run_review: bool = False,
     run_standardize: bool = False,
     run_famd: bool = False,
+    run_split: bool = False,
     conservative: bool = False,
 ):
     """
@@ -343,6 +344,11 @@ def main(
     if run_famd:
         with Timer("FAMD Analysis"):
             run_famd_analysis(df)
+
+    # ---- Giai đoạn chia tập Train/Test ----
+    if run_split:
+        with Timer("Train/Test Split"):
+            run_split_analysis(df)
 
     # ---- Giai đoạn 4: Statistical analysis ----
     if run_stats:
@@ -569,6 +575,36 @@ def run_statistical_analysis(df: pl.DataFrame):
                 print(f"  {col:<40s} {'ERROR':>14s} {str(e)[:30]:>30s}")
 
 
+def run_split_analysis(df: pl.DataFrame):
+    """Chia tập train/test stratified + báo cáo cân bằng."""
+    from src.ml_models import StratifiedSplitter
+
+    splitter = StratifiedSplitter()
+
+    train_df, test_df, report = splitter.split(
+        df,
+        test_size=0.2,
+        excluded_cols=EXCLUDED_COLUMNS,
+        target_col="Depression",
+        verbose=True,
+    )
+
+    # Lưu report dưới dạng JSON
+    import json
+    from pathlib import Path
+
+    output_path = Path("results/")
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Convert numpy types
+    serializable = json.loads(json.dumps(report, default=str))
+
+    report_path = output_path / "split_report.json"
+    with open(report_path, "w", encoding="utf-8") as f:
+        json.dump(serializable, f, indent=2, ensure_ascii=False)
+    print(f"\n  ✅ Báo cáo đã lưu: {report_path}")
+
+
 def run_famd_analysis(df: pl.DataFrame):
     """FAMD — Giảm chiều dữ liệu hỗn hợp + biểu đồ."""
     from src.ml_models import FAMDAnalyzer
@@ -706,11 +742,13 @@ if __name__ == "__main__":
                         help="Chuẩn hóa tên cột, giá trị categorical, phân loại biến, ước lượng feature matrix")
     parser.add_argument("--famd", action="store_true",
                         help="FAMD — Giảm chiều dữ liệu hỗn hợp (numeric + categorical), biểu đồ, top biến đóng góp")
+    parser.add_argument("--split", action="store_true",
+                        help="Chia tập train/test stratified — kiểm tra cân bằng phân phối")
 
     args = parser.parse_args()
 
     # Default: nếu không có flag nào → chạy EDA
-    any_flag = args.eda or args.stats or args.models or args.leakage or args.full or args.review or args.standardize or args.famd
+    any_flag = args.eda or args.stats or args.models or args.leakage or args.full or args.review or args.standardize or args.famd or args.split
 
     try:
         if args.full:
@@ -722,6 +760,7 @@ if __name__ == "__main__":
                 run_review=True,
                 run_standardize=True,
                 run_famd=False,
+                run_split=False,
                 conservative=args.conservative,
             )
         elif any_flag:
@@ -734,6 +773,7 @@ if __name__ == "__main__":
                 run_review=args.review,
                 run_standardize=args.standardize,
                 run_famd=args.famd,
+                run_split=args.split,
                 conservative=args.conservative,
             )
         else:
