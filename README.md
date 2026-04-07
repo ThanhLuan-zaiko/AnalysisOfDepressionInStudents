@@ -524,6 +524,20 @@ uv run python main.py --models --conservative    # Huấn luyện Phiên bản A
 uv run python main.py --full --conservative      # Toàn bộ pipeline, Phiên bản A
 ```
 
+### 📁 Tổng hợp Output theo Flag
+
+| Flag | File sinh ra | Output console |
+|------|-------------|----------------|
+| *(không flag)* / `--eda` | 6 HTML + 1 JSON | Cảnh báo đạo đức, EDA summary, data review |
+| `--review` | — | Biến hằng số, missing values, rare categories, cảnh báo |
+| `--standardize` | — | Rename cột, chuẩn hóa giá trị, phân loại biến, feature estimate |
+| `--stats` | — | Thống kê mô tả, Mann-Whitney U (Cohen d), Chi-square (Cramer V, OR), Spearman |
+| `--famd` | 5 HTML | Eigenvalues, top biến đóng góp theo PC, phương sai tích lũy |
+| `--split` | 1 JSON (`split_report.json`) | Kích thước train/test, phân phối target, KS test |
+| `--leakage` | 1 JSON (`leakage_investigation.json`) | Odds Ratio, Stress Test, Cross-Tab, Synthetic Check |
+| `--models` | 1 JSON (`model_results_*.json`) | 3 mô hình (Dummy, LR, CatBoost), Fairness, Threshold |
+| `--full` | 6 HTML + 3-4 JSON | **Tất cả** các output trên |
+
 ### File khác
 
 ```bash
