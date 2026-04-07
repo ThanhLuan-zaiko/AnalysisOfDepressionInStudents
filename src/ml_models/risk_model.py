@@ -4,7 +4,8 @@ Risk Modeling Module - Phân tầng nguy cơ trầm cảm
 Theo kế hoạch khoa học:
   - Model 0: Dummy baseline (luôn dự đoán lớp đa số)
   - Model 1: Penalized Logistic Regression (trung tâm, giải thích được)
-  - Model 2: CatBoost (dự báo bổ sung, mạnh hơn)
+  - Model 2: GAM - Generalized Additive Model (linh hoạt, vẫn diễn giải được)
+  - Model 3: CatBoost (dự báo bổ sung, mạnh hơn)
 
 Ethical note: Đây là công cụ HỖ TRỢ sàng lọc, KHÔNG thay thế đánh giá lâm sàng.
 
@@ -349,7 +350,69 @@ class DepressionRiskModeler:
         return df_coef
 
     # ==========================================
-    # 🌲 MODEL 2: CATBOOST
+    # 📊 MODEL 2: GAM (GENERALIZED ADDITIVE MODEL)
+    # ==========================================
+
+    def train_gam(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        feature_names: List[str],
+        feature_types: Optional[Dict[str, str]] = None,
+        n_splines: int = 10,
+    ) -> Dict:
+        """
+        Model 2: Generalized Additive Model — cân bằng giữa interpretability và flexibility.
+
+        Ưu điểm:
+        - Capture được nonlinear relationships
+        - Vẫn interpretability được (partial dependence plots)
+        - Transparent hơn tree-based models
+        - Good middle ground giữa LR và CatBoost
+        """
+        from src.ml_models.gam_model import GAMClassifier
+
+        # Auto-detect feature types if not provided
+        if feature_types is None:
+            feature_types = {}
+            for name in feature_names:
+                # Check if nominal (has '=' indicating one-hot)
+                if '=' in name:
+                    # This is a one-hot encoded column from a categorical
+                    base_feat = name.split('=')[0]
+                    if base_feat not in feature_types:
+                        feature_types[name] = 'nominal'
+                    else:
+                        feature_types[name] = feature_types[base_feat]
+                elif name in NOMINAL_COLUMNS:
+                    feature_types[name] = 'nominal'
+                elif name in ORDINAL_COLUMNS:
+                    feature_types[name] = 'ordinal'
+                elif name in NUMERIC_COLUMNS:
+                    feature_types[name] = 'numeric'
+                else:
+                    # Default to numeric for unknown
+                    feature_types[name] = 'numeric'
+
+        gam = GAMClassifier(random_state=self.random_state)
+
+        metrics = gam.train(
+            X, y,
+            feature_types=feature_types,
+            feature_names=feature_names,
+            n_splines=n_splines,
+            optimize_splines=True,
+        )
+
+        self.models["gam"] = gam
+        self.results["gam"] = metrics
+        self.preprocessors["gam_feature_types"] = feature_types
+
+        logger.info(f"GAM: ROC-AUC={metrics['roc_auc']:.4f}, F1={metrics['f1']:.4f}")
+        return metrics
+
+    # ==========================================
+    # 🌲 MODEL 3: CATBOOST
     # ==========================================
 
     def train_catboost(
@@ -359,15 +422,22 @@ class DepressionRiskModeler:
         feature_names: List[str],
     ) -> Dict:
         """
-        Model 2: CatBoost — mô hình dự báo bổ sung.
+        Model 3: CatBoost — mô hình dự báo bổ sung.
 
         Ưu điểm:
         - Xử lý tốt dữ liệu bảng hỗn hợp
         - Tự động xử lý biến phân loại
         - Thường mạnh hơn logistic regression về dự báo
+        - Hỗ trợ GPU acceleration
         """
         try:
             from catboost import CatBoostClassifier, Pool
+            import torch
+
+            # Tự động detect GPU cho CatBoost
+            use_gpu = torch.cuda.is_available()
+            device_info = "GPU" if use_gpu else "CPU"
+            logger.info(f"CatBoost using device: {device_info}")
 
             # Tính class weights
             n_samples = len(y)
@@ -375,16 +445,25 @@ class DepressionRiskModeler:
             n_class_1 = (y == 1).sum()
             class_weights = [n_samples / (2 * n_class_0), n_samples / (2 * n_class_1)]
 
-            catboost = CatBoostClassifier(
-                iterations=500,
-                depth=6,
-                learning_rate=0.05,
-                class_weights=class_weights,
-                loss_function="Logloss",
-                verbose=False,
-                random_seed=self.random_state,
-                early_stopping_rounds=30,
-            )
+            # CatBoost GPU params
+            catboost_params = {
+                "iterations": 500,
+                "depth": 6,
+                "learning_rate": 0.05,
+                "class_weights": class_weights,
+                "loss_function": "Logloss",
+                "verbose": False,
+                "random_seed": self.random_state,
+                "early_stopping_rounds": 30,
+            }
+
+            # Bật GPU nếu có
+            if use_gpu:
+                catboost_params["task_type"] = "GPU"
+                catboost_params["devices"] = "0"
+                logger.info(f"  ✅ CatBoost GPU enabled: {torch.cuda.get_device_name(0)}")
+
+            catboost = CatBoostClassifier(**catboost_params)
 
             # Cross-validation thủ công (CatBoost không hỗ trợ sklearn CV tốt)
             cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=self.random_state)
@@ -401,12 +480,7 @@ class DepressionRiskModeler:
                 X_train, X_val = X[train_idx], X[val_idx]
                 y_train, y_val = y[train_idx], y[val_idx]
 
-                cb_fold = CatBoostClassifier(
-                    iterations=500, depth=6, learning_rate=0.05,
-                    class_weights=class_weights, loss_function="Logloss",
-                    verbose=False, random_seed=self.random_state,
-                    early_stopping_rounds=30,
-                )
+                cb_fold = CatBoostClassifier(**catboost_params)
                 cb_fold.fit(X_train, y_train, eval_set=(X_val, y_val))
                 y_val_proba = cb_fold.predict_proba(X_val)[:, 1]
                 y_val_pred = cb_fold.predict(X_val)
@@ -444,6 +518,7 @@ class DepressionRiskModeler:
                 "brier_score": brier_score_loss(y, y_proba),
                 "feature_importance": importance_df.to_pandas().to_dict(orient="records"),
                 "cv_scores": {k: v for k, v in cv_metrics.items()},
+                "_used_gpu": use_gpu,  # Flag để verify GPU usage
             }
 
             self.models["catboost"] = catboost
@@ -581,7 +656,7 @@ class DepressionRiskModeler:
         include_suicidal: bool = True,
     ):
         """
-        In báo cáo fairness cho cả 2 mô hình.
+        In báo cáo fairness cho cả models.
         """
         print()
         print("=" * 80)
@@ -589,11 +664,16 @@ class DepressionRiskModeler:
         print(f" ⚖️  FAIRNESS ANALYSIS — PHIÊN BẢN {version_tag}")
         print("=" * 80)
 
-        for model_name in ["logistic", "catboost"]:
+        for model_name in ["logistic", "gam", "catboost"]:
             if model_name not in self.models:
                 continue
 
-            label = "Logistic Regression" if model_name == "logistic" else "CatBoost"
+            label_map = {
+                "logistic": "Logistic Regression",
+                "gam": "GAM",
+                "catboost": "CatBoost",
+            }
+            label = label_map.get(model_name, model_name)
             print(f"\n  📊 {label}:")
 
             df_fair = self.fairness_by_subgroup(df, model_name, include_suicidal)
@@ -680,7 +760,12 @@ class DepressionRiskModeler:
         """
         df_thresh = self.threshold_analysis(df, model_name, include_suicidal)
 
-        label = "Logistic Regression" if model_name == "logistic" else "CatBoost"
+        label_map = {
+            "logistic": "Logistic Regression",
+            "gam": "GAM",
+            "catboost": "CatBoost",
+        }
+        label = label_map.get(model_name, model_name)
         print(f"\n  🎯 PHÂN TÍCH NGƯỠNG QUYẾT ĐỊNH — {label}:")
         print()
         print("  Threshold | Recall | Precision |   F1   |  FPR   |  FNR   | Flagged")
@@ -739,8 +824,22 @@ class DepressionRiskModeler:
         comparison = self.compare_models()
         print(comparison)
 
-        # Tìm model tốt nhất
-        if "logistic" in self.results:
+        # Find models that exist
+        has_dummy = "dummy" in self.results
+        has_lr = "logistic" in self.results
+        has_gam = "gam" in self.results
+        has_catboost = "catboost" in self.results and "error" not in self.results.get("catboost", {})
+
+        # Dummy baseline
+        if has_dummy:
+            dm = self.results["dummy"]
+            print(f"\n  🎯 Dummy Baseline:")
+            print(f"     ROC-AUC: {dm['roc_auc']:.4f}")
+            print(f"     F1:      {dm['f1']:.4f}")
+            print(f"     Brier:   {dm['brier_score']:.4f}")
+
+        # Logistic Regression
+        if has_lr:
             lr = self.results["logistic"]
             print(f"\n  📈 Logistic Regression (mô hình trung tâm):")
             print(f"     ROC-AUC: {lr['roc_auc']:.4f} ± {lr['roc_auc_std']:.4f}")
@@ -748,7 +847,17 @@ class DepressionRiskModeler:
             print(f"     F1:      {lr['f1']:.4f} ± {lr['f1_std']:.4f}")
             print(f"     Brier:   {lr['brier_score']:.4f}")
 
-        if "catboost" in self.results and "error" not in self.results.get("catboost", {}):
+        # GAM
+        if has_gam:
+            gam = self.results["gam"]
+            print(f"\n  🎨 GAM - Generalized Additive Model (linh hoạt):")
+            print(f"     ROC-AUC: {gam['roc_auc']:.4f} ± {gam['roc_auc_std']:.4f}")
+            print(f"     PR-AUC:  {gam['pr_auc']:.4f} ± {gam['pr_auc_std']:.4f}")
+            print(f"     F1:      {gam['f1']:.4f} ± {gam['f1_std']:.4f}")
+            print(f"     Brier:   {gam['brier_score']:.4f}")
+
+        # CatBoost
+        if has_catboost:
             cb = self.results["catboost"]
             print(f"\n  🌲 CatBoost (mô hình dự báo):")
             print(f"     ROC-AUC: {cb['roc_auc']:.4f} ± {cb['roc_auc_std']:.4f}")
@@ -756,21 +865,22 @@ class DepressionRiskModeler:
             print(f"     F1:      {cb['f1']:.4f} ± {cb['f1_std']:.4f}")
             print(f"     Brier:   {cb['brier_score']:.4f}")
 
-        if "dummy" in self.results:
-            dm = self.results["dummy"]
-            print(f"\n  🎯 Dummy Baseline:")
-            print(f"     ROC-AUC: {dm['roc_auc']:.4f}")
-            print(f"     F1:      {dm['f1']:.4f}")
-            print(f"     Brier:   {dm['brier_score']:.4f}")
-
         # Feature importance (logistic)
-        if "logistic" in self.models and "logistic" in self.results:
+        if has_lr and "logistic" in self.results:
             print(f"\n  🔍 Top 10 biến quan trọng nhất (Logistic Regression):")
             coefs = self.results["logistic"].get("coeficients", [])
             for i, item in enumerate(coefs[:10], 1):
                 or_val = item["odds_ratio"]
                 direction = "↑" if item["coefficient"] > 0 else "↓"
                 print(f"     {i:2d}. {item['feature']:<40s} OR={or_val:.3f} {direction}")
+
+        # Feature importance (GAM)
+        if has_gam and "gam" in self.results:
+            print(f"\n  🎨 Top 10 biến quan trọng nhất (GAM):")
+            importance = self.results["gam"].get("feature_importance", [])
+            for i, item in enumerate(importance[:10], 1):
+                var_imp = item["variance_importance"]
+                print(f"     {i:2d}. {item['feature']:<40s} VarImp={var_imp:.6f}")
 
         print()
         print("  ⚠️  LƯU Ý:")
@@ -788,9 +898,12 @@ class DepressionRiskModeler:
         df: pl.DataFrame,
         include_suicidal: bool = True,
         output_dir: str = "results/",
+        run_gam: bool = True,
     ) -> Dict:
         """
         Chạy toàn bộ pipeline: chuẩn bị dữ liệu → huấn luyện → đánh giá → báo cáo.
+        
+        Sequence: Baseline → Logistic → GAM → CatBoost
         """
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
@@ -799,6 +912,18 @@ class DepressionRiskModeler:
         print("=" * 80)
         print(" 🤖 GIAI ĐOẠN 7-8: XÂY DỰNG & ĐÁNH GIÁ MÔ HÌNH")
         print("=" * 80)
+
+        # Device info
+        import torch
+        print()
+        print(" 💻 DEVICE INFO:")
+        if torch.cuda.is_available():
+            print(f"     ✅ GPU: {torch.cuda.get_device_name(0)}")
+            print(f"     ✅ CUDA: {torch.version.cuda}")
+            print(f"     ✅ CatBoost sẽ dùng GPU acceleration")
+        else:
+            print(f"     ⚠️  CPU only (không có GPU)")
+        print()
 
         version = "full" if include_suicidal else "conservative"
         print(f"\n  📌 Phiên bản: {'ĐẦY ĐỦ' if include_suicidal else 'BẢO THỦ'}")
@@ -814,30 +939,37 @@ class DepressionRiskModeler:
         print(f"     Class distribution: {(y == 1).sum()} positive, {(y == 0).sum()} negative")
 
         # 2. Model 0: Dummy
-        print("\n  🎯 Model 0: Dummy Baseline...")
+        print("\n  🎯 [1/4] Model 0: Dummy Baseline...")
         self.train_dummy(X, y)
 
         # 3. Model 1: Logistic Regression
-        print("\n  📈 Model 1: Logistic Regression (trung tâm)...")
+        print("\n  📈 [2/4] Model 1: Logistic Regression (trung tâm)...")
         self.train_logistic(X, y, feature_names)
 
-        # 4. Model 2: CatBoost
-        print("\n  🌲 Model 2: CatBoost (dự báo bổ sung)...")
+        # 4. Model 2: GAM
+        if run_gam:
+            print("\n  🎨 [3/4] Model 2: GAM - Generalized Additive Model...")
+            self.train_gam(X, y, feature_names)
+        else:
+            print("\n  ⏭️  Bỏ qua GAM (run_gam=False)")
+
+        # 5. Model 3: CatBoost
+        print("\n  🌲 [4/4] Model 3: CatBoost (dự báo bổ sung)...")
         self.train_catboost(X, y, feature_names)
 
-        # 5. Calibration
+        # 6. Calibration
         print("\n  📊 Calibration Analysis...")
-        for name in ["logistic", "catboost"]:
+        for name in ["logistic", "gam", "catboost"]:
             if name in self.models:
                 model = self.models[name]
                 y_proba = model.predict_proba(X)[:, 1]
                 cal = self.calibration_analysis(y, y_proba, name.upper())
                 print(f"     {name.upper()}: Brier score = {cal['brier_score']:.4f}")
 
-        # 6. Compare & Report
+        # 7. Compare & Report
         self.print_report(include_suicidal)
 
-        # 7. Save results
+        # 8. Save results
         results_path = output_path / f"model_results_{version}.json"
         serializable_results = {}
         for name, metrics in self.results.items():
@@ -862,6 +994,7 @@ class DepressionRiskModeler:
             "n_features": int(X.shape[1]),
             "class_0": int((y == 0).sum()),
             "class_1": int((y == 1).sum()),
+            "models_trained": list(self.models.keys()),
         }
 
         with open(results_path, "w", encoding="utf-8") as f:

@@ -4,6 +4,7 @@ Train depression risk prediction models
 
 Theo kế hoạch khoa học:
   - Logistic Regression (trung tâm, giải thích được)
+  - GAM (linh hoạt, vẫn diễn giải được)
   - CatBoost (dự báo bổ sung)
   - Dummy baseline
 """
@@ -16,6 +17,8 @@ from .risk_model import DepressionRiskModeler
 from .leakage_check import LabelLeakageInvestigator
 from .famd import FAMDAnalyzer
 from .stratified_split import StratifiedSplitter
+from .gam_model import GAMClassifier
+from .model_comparator import ModelComparator
 
 __all__ = [
     "DepressionPredictor",
@@ -26,4 +29,6 @@ __all__ = [
     "LabelLeakageInvestigator",
     "FAMDAnalyzer",
     "StratifiedSplitter",
+    "GAMClassifier",
+    "ModelComparator",
 ]

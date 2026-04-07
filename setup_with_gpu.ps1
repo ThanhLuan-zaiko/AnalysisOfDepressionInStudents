@@ -252,16 +252,17 @@ function Get-GpuType {
     # Priority 3: Check for Intel GPU (Arc, Iris, UHD, HD Graphics)
     $intelGpu = $gpus | Where-Object { $_ -match "Intel|Arc|Iris|UHD|HD Graphics" }
     if ($intelGpu) {
-        Write-Host "[FOUND] Intel GPU: $intelGpu" -ForegroundColor Green
+        $intelModel = $intelGpu | Select-Object -First 1
+        Write-Host "[FOUND] Intel GPU: $intelModel" -ForegroundColor Green
 
         # Intel Arc = full XPU support, Intel UHD/Iris = limited
-        if ($intelGpu -match "Arc") {
+        if ($intelModel -match "Arc") {
             Write-Host "[OK] Intel Arc GPU detected - Full XPU support available" -ForegroundColor Green
-            return @{ Type = "intel"; CudaVersion = $null; WheelVariant = "xpu" }
+            return @{ Type = "intel"; CudaVersion = $null; WheelVariant = "xpu"; GpuModel = $intelModel }
         } else {
             Write-Host "[INFO] Intel integrated GPU detected - Limited XPU support" -ForegroundColor Yellow
             Write-Host "  Intel Iris/UHD may fall back to CPU for some operations" -ForegroundColor Yellow
-            return @{ Type = "intel"; CudaVersion = $null; WheelVariant = "xpu" }
+            return @{ Type = "intel"; CudaVersion = $null; WheelVariant = "xpu"; GpuModel = $intelModel }
         }
     }
 
@@ -298,12 +299,12 @@ $commonPackages = @(
     "polars",
     "pyarrow",
     "duckdb",
-    
+
     # Visualization
     "plotly",
     "datashader",
     "holoviews",
-    
+
     # Machine Learning
     "xgboost",
     "lightgbm",
@@ -312,16 +313,24 @@ $commonPackages = @(
     "factor_analyzer",
     "pingouin",
     "prince",
+    "pygam",
+
+    # Scikit-learn ecosystem (required by many ML packages)
+    "scikit-learn",
+    "shap",
+    "numpy",
+    "pandas",
+    "joblib",
 
     # Online Learning (River alternative - works with Python 3.14)
     "vowpalwabbit",
-    
+
     # Hyperparameter Tuning
     "optuna",
-    
+
     # Survival Analysis
     "lifelines",
-    
+
     # Time Series
     "darts",
     "neuralprophet"
@@ -405,10 +414,12 @@ if ($failedPackages.Count -gt 0) {
     Write-Host "Installed categories:" -ForegroundColor Cyan
     Write-Host "  📊 Data Processing: polars, pyarrow, duckdb" -ForegroundColor Gray
     Write-Host "  📈 Visualization: plotly, datashader, holoviews" -ForegroundColor Gray
-    Write-Host "  🤖 ML: xgboost, lightgbm, catboost, statsmodels" -ForegroundColor Gray
-    Write-Host "  📐 Statistics: factor_analyzer, pingouin, optuna" -ForegroundColor Gray
+    Write-Host "  🤖 ML: xgboost, lightgbm, catboost, statsmodels, pygam" -ForegroundColor Gray
+    Write-Host "  📐 Statistics: factor_analyzer, pingouin, prince, optuna" -ForegroundColor Gray
+    Write-Host "  🔍 Explainability: shap" -ForegroundColor Gray
+    Write-Host "  📦 Core ML: scikit-learn, numpy, pandas, joblib" -ForegroundColor Gray
     Write-Host "  ⏱️  Time Series: darts, neuralprophet" -ForegroundColor Gray
-    Write-Host "  🔄 Online ML: vowpalwabbit (faster than river)" -ForegroundColor Gray
+    Write-Host "  🔄 Online ML: vowpalwabbit" -ForegroundColor Gray
     Write-Host "  🏥 Survival: lifelines" -ForegroundColor Gray
 }
 
@@ -426,88 +437,78 @@ switch ($gpuType) {
         $indexUrl = "https://download.pytorch.org/whl/$wheelVariant"
         Write-Host "Installing PyTorch with $wheelVariant support..." -ForegroundColor Cyan
         Write-Host "  Index URL: $indexUrl" -ForegroundColor Gray
-        Write-Host "  Method: uv add --index pytorch=<url> (official Astral approach)" -ForegroundColor Gray
+        Write-Host ""
 
-        # Official uv approach: use named index that gets added to pyproject.toml
-        & uv add torch torchvision torchaudio --index pytorch=$indexUrl
+        # CRITICAL: Use pip install with explicit index to avoid CPU fallback
+        # uv add may resolve to CPU version from PyPI if dependency conflicts occur
+        Write-Host "  Force installing GPU wheels (avoiding CPU fallback)..." -ForegroundColor Gray
+        & uv pip install torch torchvision torchaudio --index-url $indexUrl --force-reinstall --no-deps
         $installExitCode = $LASTEXITCODE
 
         if ($installExitCode -eq 0) {
             $installSuccess = $true
             Write-Host "  ✅ PyTorch GPU packages installed successfully" -ForegroundColor Green
         } else {
-            Write-Host "  ⚠️  Installation failed, trying alternative approaches..." -ForegroundColor Yellow
+            Write-Host "  ❌ GPU installation failed" -ForegroundColor Red
+            Write-Host "  Checking CUDA compatibility..." -ForegroundColor Yellow
 
-            # Alternative: Force reinstall GPU wheels using direct index URL
-            Write-Host "  Trying uv pip install with explicit CUDA index..." -ForegroundColor Gray
-            & uv pip install torch torchvision torchaudio --index-url $indexUrl --force-reinstall --no-deps
-            if ($LASTEXITCODE -eq 0) {
-                $installSuccess = $true
-                Write-Host "  ✅ PyTorch GPU packages installed (direct index method)" -ForegroundColor Green
+            # Check driver max CUDA support via nvidia-smi
+            $smiOutput = & nvidia-smi 2>&1
+            $driverMaxCuda = ($smiOutput | Select-String "CUDA Version: (\d+\.\d+)" | ForEach-Object { $_.Matches.Groups[1].Value }) | Select-Object -First 1
+
+            if ($driverMaxCuda) {
+                Write-Host "  Driver supports max CUDA: $driverMaxCuda" -ForegroundColor Yellow
+
+                # Map to appropriate wheel variant
+                $driverMajor = [int]$driverMaxCuda.Split('.')[0]
+                $driverMinor = [int]$driverMaxCuda.Split('.')[1]
+
+                $fallbackVariant = "cu126"  # Default fallback
+                if ($driverMajor -ge 12) {
+                    if ($driverMinor -ge 6) { $fallbackVariant = "cu126" }
+                    elseif ($driverMinor -ge 4) { $fallbackVariant = "cu124" }
+                    elseif ($driverMinor -ge 1) { $fallbackVariant = "cu121" }
+                } elseif ($driverMajor -ge 11) {
+                    $fallbackVariant = "cu118"
+                }
+
+                if ($fallbackVariant -ne $wheelVariant) {
+                    Write-Host "  Retrying with $fallbackVariant wheels (driver-compatible)..." -ForegroundColor Cyan
+                    $fallbackUrl = "https://download.pytorch.org/whl/$fallbackVariant"
+                    & uv pip install torch torchvision torchaudio --index-url $fallbackUrl --force-reinstall --no-deps
+                    if ($LASTEXITCODE -eq 0) {
+                        $installSuccess = $true
+                        Write-Host "  ✅ PyTorch installed with $fallbackVariant (driver-compatible)" -ForegroundColor Green
+                    }
+                }
             }
         }
 
-        # Post-installation: Verify GPU actually works
+        # Verify GPU works
         if ($installSuccess) {
             Write-Host "  Verifying GPU functionality..." -ForegroundColor Gray
             $testOutput = & .venv\Scripts\python.exe -c "import torch; print('cuda_available' if torch.cuda.is_available() else 'cuda_unavailable'); print(torch.version.cuda if torch.cuda.is_available() else 'N/A')" 2>&1
 
-            if ($testOutput -match "cuda_unavailable") {
-                Write-Host "  ⚠️  GPU wheels installed but CUDA not available!" -ForegroundColor Yellow
-                Write-Host "  This usually means driver doesn't support this CUDA version." -ForegroundColor Yellow
-
-                # Check driver max CUDA support via nvidia-smi
-                Write-Host "  Checking NVIDIA driver CUDA support..." -ForegroundColor Gray
-                $smiOutput = & nvidia-smi 2>&1
-                $driverMaxCuda = ($smiOutput | Select-String "CUDA Version: (\d+\.\d+)" | ForEach-Object { $_.Matches.Groups[1].Value }) | Select-Object -First 1
-
-                if ($driverMaxCuda) {
-                    Write-Host "  Driver supports max CUDA: $driverMaxCuda" -ForegroundColor Yellow
-
-                    # Map to appropriate wheel variant
-                    $driverMajor = [int]$driverMaxCuda.Split('.')[0]
-                    $driverMinor = [int]$driverMaxCuda.Split('.')[1]
-
-                    $fallbackVariant = "cpu"
-                    if ($driverMajor -ge 12) {
-                        if ($driverMinor -ge 6) { $fallbackVariant = "cu126" }
-                        elseif ($driverMinor -ge 4) { $fallbackVariant = "cu124" }
-                        elseif ($driverMinor -ge 1) { $fallbackVariant = "cu121" }
-                    } elseif ($driverMajor -ge 11) {
-                        $fallbackVariant = "cu118"
-                    }
-
-                    if ($fallbackVariant -ne "cpu") {
-                        Write-Host "  Retrying with $fallbackVariant wheels (matching driver)..." -ForegroundColor Cyan
-                        $fallbackUrl = "https://download.pytorch.org/whl/$fallbackVariant"
-                        & uv pip install torch torchvision torchaudio --index-url $fallbackUrl --force-reinstall --no-deps
-                        if ($LASTEXITCODE -eq 0) {
-                            Write-Host "  ✅ PyTorch reinstalled with $fallbackVariant (driver-compatible)" -ForegroundColor Green
-
-                            # Verify again
-                            $testOutput2 = & .venv\Scripts\python.exe -c "import torch; print('cuda_available' if torch.cuda.is_available() else 'cuda_unavailable')" 2>&1
-                            if ($testOutput2 -notmatch "cuda_unavailable") {
-                                Write-Host "  ✅ GPU now works with $fallbackVariant!" -ForegroundColor Green
-                            }
-                        }
-                    }
-                }
-            } elseif ($testOutput -match "cuda_available") {
-                Write-Host "  ✅ GPU verification PASSED!" -ForegroundColor Green
+            if ($testOutput -match "cuda_available") {
+                Write-Host "  ✅ CUDA verification PASSED!" -ForegroundColor Green
+            } else {
+                Write-Host "  ⚠️  CUDA not available despite GPU wheels installed" -ForegroundColor Yellow
+                Write-Host "  Possible causes:" -ForegroundColor Yellow
+                Write-Host "    - NVIDIA driver outdated (update from nvidia.com)" -ForegroundColor Yellow
+                Write-Host "    - CUDA toolkit version mismatch" -ForegroundColor Yellow
+                Write-Host "    - GPU compute capability too old (< 3.5)" -ForegroundColor Yellow
             }
-        }
-
-        if (-not $installSuccess) {
+        } else {
             Write-Host ""
-            Write-Host "[WARNING] PyTorch GPU installation failed" -ForegroundColor Yellow
-            Write-Host "  Falling back to CPU version..." -ForegroundColor Yellow
+            Write-Host "  ❌ CRITICAL: Could not install PyTorch with CUDA support" -ForegroundColor Red
+            Write-Host "  Installing CPU version as last resort..." -ForegroundColor Yellow
             $gpuType = "cpu"
-            & uv add torch torchvision torchaudio
+            & uv pip install torch torchvision torchaudio --no-deps
             if ($LASTEXITCODE -eq 0) { $installSuccess = $true }
         }
     }
     "amd" {
-        Write-Host "Installing PyTorch with ROCm support..." -ForegroundColor Cyan
+        Write-Host "Installing PyTorch with AMD ROCm support..." -ForegroundColor Cyan
         Write-Host ""
 
         # Check if running in WSL2
@@ -516,29 +517,26 @@ switch ($gpuType) {
         if ($isWSL) {
             # WSL2 - Full ROCm support via pip
             Write-Host "[OK] Running in WSL2 - Installing ROCm via pip..." -ForegroundColor Green
-            Write-Host "  Installing JAX with ROCm (better Windows AMD support)..." -ForegroundColor Gray
 
-            # JAX has better ROCm support on Windows/WSL2 than PyTorch
-            & uv pip install "jax[cuda12]" --upgrade
-            $jaxExitCode = $LASTEXITCODE
-
-            if ($jaxExitCode -eq 0) {
-                # Also install PyTorch ROCm if possible
-                Write-Host "  Installing PyTorch ROCm..." -ForegroundColor Gray
-                & uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.2
-                if ($LASTEXITCODE -eq 0) { $installSuccess = $true }
+            # Try PyTorch ROCm wheels first
+            Write-Host "  Installing PyTorch ROCm..." -ForegroundColor Gray
+            & uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.2 --force-reinstall --no-deps
+            if ($LASTEXITCODE -eq 0) {
+                $installSuccess = $true
+                Write-Host "  ✅ PyTorch ROCm installed" -ForegroundColor Green
             }
 
             if (-not $installSuccess) {
                 Write-Host "  Falling back to CPU version..." -ForegroundColor Yellow
                 $gpuType = "cpu"
-                & uv add torch torchvision torchaudio
+                & uv pip install torch torchvision torchaudio --no-deps
                 if ($LASTEXITCODE -eq 0) { $installSuccess = $true }
             }
         } else {
             # Native Windows - ROCm has limited support
             Write-Host "[WARNING] ROCm on native Windows has limited support" -ForegroundColor Yellow
-            Write-Host "  Attempting installation with direct wheels..." -ForegroundColor Gray
+            Write-Host "  Recommended: Use WSL2 for full ROCm support (wsl --install)" -ForegroundColor Yellow
+            Write-Host ""
 
             # Check Python version
             $pythonVersion = python --version 2>&1 | Select-String -Pattern "3\.(\d+)" | ForEach-Object { $_.Matches.Groups[1].Value }
@@ -548,7 +546,7 @@ switch ($gpuType) {
                 $rocmVersion = "7.2.1"
                 $rocmBaseUrl = "https://repo.radeon.com/rocm/windows/rocm-rel-$rocmVersion"
 
-                Write-Host "  Installing ROCm SDK for Python 3.12..." -ForegroundColor Gray
+                Write-Host "  Attempting ROCm SDK installation for Python 3.12..." -ForegroundColor Gray
                 & uv pip install `
                     "$rocmBaseUrl/rocm_sdk_core-$rocmVersion-py3-none-win_amd64.whl" `
                     "$rocmBaseUrl/rocm_sdk_devel-$rocmVersion-py3-none-win_amd64.whl"
@@ -566,79 +564,89 @@ switch ($gpuType) {
                 # Python 3.13+ - ROCm not available on Windows
                 Write-Host "[WARNING] ROCm only supports Python 3.12 on Windows" -ForegroundColor Yellow
                 Write-Host "  Current Python: 3.$pythonVersion" -ForegroundColor Yellow
-                Write-Host "  Falling back to CPU version..." -ForegroundColor Yellow
+                Write-Host "  Options:" -ForegroundColor Yellow
+                Write-Host "    1. Downgrade to Python 3.12 for ROCm support" -ForegroundColor Yellow
+                Write-Host "    2. Use WSL2 for full ROCm support" -ForegroundColor Yellow
+                Write-Host "    3. Use CPU version (slower)" -ForegroundColor Yellow
+                Write-Host ""
             }
 
             if (-not $installSuccess) {
                 Write-Host "  Falling back to CPU version..." -ForegroundColor Yellow
                 $gpuType = "cpu"
-                & uv add torch torchvision torchaudio
+                & uv pip install torch torchvision torchaudio --no-deps
                 if ($LASTEXITCODE -eq 0) { $installSuccess = $true }
             }
         }
     }
     "intel" {
         Write-Host "Installing PyTorch with Intel XPU support..." -ForegroundColor Cyan
-        Write-Host "  Method: Native XPU wheels from PyTorch (PyTorch 2.11+)" -ForegroundColor Gray
+        Write-Host "  Method: Intel Extension for PyTorch (IPEX)" -ForegroundColor Gray
         Write-Host ""
 
         # Check if Intel Arc (discrete) or integrated GPU
-        if ($gpuInfo.WheelVariant -eq "xpu" -and $gpuInfo.GpuModel -match "Arc") {
+        $gpuModel = $gpuInfo.GpuModel
+        if ($gpuModel -match "Arc") {
             Write-Host "[OK] Intel Arc GPU detected - Full XPU support" -ForegroundColor Green
         } else {
-            Write-Host "[INFO] Intel integrated GPU - Limited XPU support" -ForegroundColor Yellow
+            Write-Host "[INFO] Intel integrated GPU ($gpuModel) - Limited XPU support" -ForegroundColor Yellow
             Write-Host "  Some operations may fall back to CPU" -ForegroundColor Yellow
         }
 
-        # Try native XPU wheels first (PyTorch 2.11+)
-        $indexUrl = "https://download.pytorch.org/whl/xpu"
-        Write-Host "  Installing from PyTorch XPU index..." -ForegroundColor Gray
+        # Step 1: Install base PyTorch (CPU) first - required for IPEX
+        Write-Host "  Step 1: Installing base PyTorch..." -ForegroundColor Gray
+        & uv pip install torch torchvision torchaudio --no-deps
+        $baseExitCode = $LASTEXITCODE
 
-        & uv add torch torchvision torchaudio --index xpu=$indexUrl
-        $installExitCode = $LASTEXITCODE
+        if ($baseExitCode -ne 0) {
+            Write-Host "  ❌ Failed to install base PyTorch" -ForegroundColor Red
+            Write-Host "  Trying alternative install method..." -ForegroundColor Yellow
+            & uv add torch torchvision torchaudio
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "  ❌ All installation attempts failed" -ForegroundColor Red
+                return
+            }
+        }
 
-        if ($installExitCode -eq 0) {
+        # Step 2: Install Intel Extension for PyTorch (IPEX) for XPU support
+        Write-Host "  Step 2: Installing Intel Extension for PyTorch (IPEX)..." -ForegroundColor Gray
+        & uv add intel-extension-for-pytorch
+        $ipexExitCode = $LASTEXITCODE
+
+        if ($ipexExitCode -eq 0) {
             $installSuccess = $true
-            Write-Host "  ✅ PyTorch XPU packages installed" -ForegroundColor Green
+            Write-Host "  ✅ IPEX installed successfully" -ForegroundColor Green
 
-            # Verify XPU works
+            # Verify XPU
             Write-Host "  Verifying XPU functionality..." -ForegroundColor Gray
-            $testOutput = & .venv\Scripts\python.exe -c "import torch; print('xpu_available' if hasattr(torch, 'xpu') and torch.xpu.is_available() else 'xpu_unavailable')" 2>&1
+            $testOutput = & .venv\Scripts\python.exe -c "
+import torch
+try:
+    import intel_extension_for_pytorch as ipex
+    if hasattr(torch, 'xpu') and torch.xpu.is_available():
+        print('xpu_available')
+    else:
+        print('xpu_fallback_to_cpu')
+except ImportError:
+    print('ipex_not_found')
+" 2>&1
 
             if ($testOutput -match "xpu_available") {
                 Write-Host "  ✅ Intel XPU verification PASSED!" -ForegroundColor Green
+            } elseif ($testOutput -match "xpu_fallback_to_cpu") {
+                Write-Host "  ⚠️  IPEX installed but XPU not available - will use CPU" -ForegroundColor Yellow
+                Write-Host "  This is expected for Intel Iris/UHD integrated GPUs" -ForegroundColor Yellow
             } else {
-                Write-Host "  ⚠️  XPU not available, trying IPEX fallback..." -ForegroundColor Yellow
+                Write-Host "  ⚠️  IPEX import failed - check Intel driver installation" -ForegroundColor Yellow
             }
-        }
-
-        # Fallback: Intel Extension for PyTorch (IPEX)
-        if (-not $installSuccess) {
-            Write-Host "  Trying Intel Extension for PyTorch (IPEX)..." -ForegroundColor Gray
-            Write-Host "  Note: IPEX will reach EOL by March 2026" -ForegroundColor Yellow
-
-            & uv add torch torchvision torchaudio
-            if ($LASTEXITCODE -eq 0) {
-                & uv add intel-extension-for-pytorch
-                if ($LASTEXITCODE -eq 0) {
-                    $installSuccess = $true
-                    Write-Host "  ✅ IPEX installed successfully" -ForegroundColor Green
-
-                    # Verify IPEX
-                    $testOutput = & .venv\Scripts\python.exe -c "import intel_extension_for_pytorch; print('ipex_ok')" 2>&1
-                    if ($testOutput -match "ipex_ok") {
-                        Write-Host "  ✅ IPEX verification PASSED!" -ForegroundColor Green
-                    }
-                }
-            }
-        }
-
-        # Final fallback: CPU
-        if (-not $installSuccess) {
-            Write-Host "  Falling back to CPU version..." -ForegroundColor Yellow
-            $gpuType = "cpu"
-            & uv add torch torchvision torchaudio
-            if ($LASTEXITCODE -eq 0) { $installSuccess = $true }
+        } else {
+            Write-Host "  ⚠️  IPEX installation failed" -ForegroundColor Yellow
+            Write-Host "  Will use CPU-only PyTorch (Intel GPU acceleration unavailable)" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "  To enable Intel GPU support:" -ForegroundColor Yellow
+            Write-Host "  1. Install Intel Arc drivers: https://www.intel.com/content/www/us/en/support/articles/000005630/graphics.html" -ForegroundColor Yellow
+            Write-Host "  2. Ensure you have Intel Arc discrete GPU (Iris/UHD have limited support)" -ForegroundColor Yellow
+            Write-Host "  3. Try: pip install intel-extension-for-pytorch" -ForegroundColor Yellow
         }
     }
     "cpu" {

@@ -32,9 +32,21 @@ dependencies = [
     "neuralprophet>=0.5.0",
     # Online Learning
     "vowpalwabbit>=9.11.2",
+    "catboost>=1.2.10",
+    "prince>=0.17.0",
+    "pygam>=0.9.1",
+    "scikit-learn>=1.6.0",
+    "shap>=0.47.0",
+    "numpy>=2.2.0",
+    "pandas>=2.2.0",
+    "joblib>=1.4.0",
+    # Deep Learning (PyTorch with CUDA 12.6 support)
     "torch>=2.11.0",
     "torchvision>=0.26.0",
     "torchaudio>=2.11.0",
-    "catboost>=1.2.10",
-    "prince>=0.17.0",
 ]
+
+# PyTorch CUDA index
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"

@@ -709,9 +709,116 @@ def run_ml_pipeline(df: pl.DataFrame, conservative: bool = False):
     print(" 🎯 GIAI ĐOẠN 8b: CHỌN NGƯỠNG QUYẾT ĐỊNH")
     print("=" * 80)
 
-    for model_name in ["logistic", "catboost"]:
+    for model_name in ["logistic", "gam", "catboost"]:
         if model_name in modeler.models:
             modeler.print_threshold_report(df, model_name, include_suicidal=include_suicidal)
+
+    # ================================================================
+    # GIAI ĐOẠN 10: GAM VISUALIZATIONS
+    # ================================================================
+    if "gam" in modeler.models:
+        print()
+        print("=" * 80)
+        print(" 🎨 GIAI ĐOẠN 10: GAM VISUALIZATIONS & INTERPRETABILITY")
+        print("=" * 80)
+        
+        try:
+            gam_model = modeler.models["gam"]
+            
+            # Plot partial dependence cho top features
+            print("\n  📊 Vẽ partial dependence plots cho GAM...")
+            pd_plots = gam_model.plot_partial_dependence(
+                top_k=8,
+                save_dir="results/gam_plots/",
+                format="html",
+            )
+            print(f"     ✅ Đã lưu {len(pd_plots)} partial dependence plots")
+            
+            # Plot feature effects summary
+            print("\n  📊 Vẽ feature effects summary...")
+            effects_plot = gam_model.plot_feature_effects_summary(
+                save_path="results/gam_feature_effects.html",
+            )
+            print(f"     ✅ Đã lưu: {effects_plot}")
+            
+            # Generate interpretation report
+            print("\n  📊 Tạo interpretation report...")
+            interpretation = gam_model.interpret_model(
+                output_file="results/gam_interpretation.json",
+            )
+            print(f"     ✅ Đã lưu interpretation report với {len(interpretation['features'])} features")
+            
+        except Exception as e:
+            print(f"\n  ⚠️  Không thể tạo GAM visualizations: {e}")
+            import traceback
+            traceback.print_exc()
+
+    # ================================================================
+    # GIAI ĐOẠN 11: MODEL COMPARISON
+    # ================================================================
+    print()
+    print("=" * 80)
+    print(" 📊 GIAI ĐOẠN 11: SO SÁNH TOÀN DIỆN CÁC MÔ HÌNH")
+    print("=" * 80)
+    
+    try:
+        from src.ml_models.model_comparator import ModelComparator
+        
+        comparator = ModelComparator()
+        
+        # Add each model to comparator
+        X, y, feature_names = modeler.prepare_features(df, include_suicidal=include_suicidal)
+        
+        for model_name in ["dummy", "logistic", "gam", "catboost"]:
+            if model_name in modeler.models:
+                model = modeler.models[model_name]
+                y_proba = model.predict_proba(X)[:, 1]
+                y_pred = model.predict(X)
+                
+                comparator.add_model(
+                    name=model_name,
+                    y_true=y,
+                    y_proba=y_proba,
+                    y_pred=y_pred,
+                )
+        
+        # Run comprehensive comparison
+        comparison_report = comparator.compare_all()
+        
+        # Print text report
+        comparator.print_comparison_report()
+        
+        # Save visualizations
+        print("\n  📊 Lưu comparison charts...")
+        comparison_chart = comparator.plot_comparison_chart(
+            save_path="results/model_comparison.html",
+        )
+        print(f"     ✅ Đã lưu: {comparison_chart}")
+        
+        print("\n  📊 Lưu calibration curves...")
+        calibration_curves = comparator.plot_calibration_curves(
+            save_path="results/calibration_curves.html",
+        )
+        print(f"     ✅ Đã lưu: {calibration_curves}")
+        
+        print("\n  📊 Lưu decision curves...")
+        decision_curves = comparator.plot_decision_curves(
+            save_path="results/decision_curves.html",
+        )
+        print(f"     ✅ Đã lưu: {decision_curves}")
+        
+        # Save comparison report as JSON
+        import json
+        from pathlib import Path
+        output_path = Path("results/model_comparison_report.json")
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(comparison_report, f, indent=2, ensure_ascii=False, default=str)
+        print(f"\n  ✅ Đã lưu comparison report: {output_path}")
+        
+    except Exception as e:
+        print(f"\n  ⚠️  Không thể chạy model comparison: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 # ==========================================

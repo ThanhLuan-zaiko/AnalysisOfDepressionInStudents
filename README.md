@@ -24,7 +24,9 @@ src/
 │   └── plots.py              #   + ExploratoryAnalyzer
 ├── statistical_analysis/     # Pingouin, Statsmodels
 ├── ml_models/                # Risk modeling
-│   ├── risk_model.py         #   ★ Logistic Regression + CatBoost + Fairness
+│   ├── risk_model.py         #   ★ Pipeline: Baseline → Logistic → GAM → CatBoost
+│   ├── gam_model.py          #   ★ Generalized Additive Model (mới)
+│   ├── model_comparator.py   #   ★ So sánh mô hình toàn diện (mới)
 │   ├── predictor.py          #   XGBoost/LightGBM (legacy)
 │   ├── optimizer.py          #   Optuna hyperparameter tuning
 │   ├── explainer.py          #   SHAP explainability
@@ -33,11 +35,25 @@ src/
 └── utils/                    # Logging, timing, helpers
 ```
 
-**Phương pháp hiện tại:**
-- **Logistic Regression** (trung tâm) — dễ giải thích, báo cáo odds ratio
-- **CatBoost** (dự báo bổ sung) — mạnh nhất trên dữ liệu bảng hỗn hợp
-- **Fairness analysis** theo Gender, Age group, Family History
-- **Threshold optimization** — chọn ngưỡng phù hợp bài toán sàng lọc
+**Pipeline hiện tại (4 mô hình tuần tự):**
+
+| # | Mô hình | Vai trò | Ưu điểm |
+|---|---------|---------|---------|
+| 0 | **Dummy Baseline** | Reference point | Luôn dự đoán lớp đa số — tránh ảo tưởng |
+| 1 | **Logistic Regression** | Trung tâm, giải thích được | Odds ratio, dễ diễn giải, chuẩn thống kê |
+| 2 | **GAM** (Generalized Additive Model) | Linh hoạt + interpretability | Capture nonlinear, partial dependence plots |
+| 3 | **CatBoost** | Dự báo bổ sung, mạnh nhất | Xử lý tốt dữ liệu bảng hỗn hợp |
+
+**Model Comparison (so sánh toàn diện):**
+- **McNemar's test** — so sánh disagreement giữa 2 models
+- **DeLong's test** — so sánh ROC-AUC curves
+- **Calibration curves** — xác suất dự báo có đáng tin?
+- **Decision curve analysis** — clinical utility
+- **Feature importance ranking** — nhất quán giữa các models?
+
+**Fairness analysis** theo Gender, Age group, Family History
+**Threshold optimization** — chọn ngưỡng phù hợp bài toán sàng lọc
+**GAM interpretability** — partial dependence plots, feature effects
 
 **📖 Chi tiết:** Đọc [USAGE.md](USAGE.md) và [ARCHITECTURE.md](ARCHITECTURE.md)
 
@@ -87,6 +103,9 @@ cd AnalysisOfDepressionInStudents
 # Kiểm tra GPU
 uv run python verify_gpu.py
 
+# Kiểm tra GPU usage khi training
+uv run python verify_gpu_usage.py
+
 # Chạy config để xem device info
 uv run python config.py
 ```
@@ -116,11 +135,16 @@ uv run python config.py
 | Package | Là Gì? | Dùng Để Làm Gì? |
 |---------|---------|-----------------|
 | **[CatBoost](https://catboost.ai/)** | Gradient Boosting | **Mô hình dự báo chính** — xử lý tốt dữ liệu bảng hỗn hợp, tự động xử lý biến phân loại |
-| **[XGBoost](https://xgboost.readthedocs.io/)** | Gradient Boosting | Mô hình dự đoán trầm cảm |
-| **[LightGBM](https://lightgbm.readthedocs.io/)** | Gradient Boosting nhanh | Training nhanh hơn XGBoost |
+| **[pyGAM](https://pygam.readthedocs.io/)** | Generalized Additive Models | **Mô hình mới** — spline-based, capture nonlinear relationships, vẫn interpretability được |
+| **[scikit-learn](https://scikit-learn.org/)** | ML toolkit | Dummy baseline, Logistic Regression, cross-validation, metrics |
+| **[SHAP](https://shap.readthedocs.io/)** | Explainable AI | Giải thích prediction — feature importance, force plots |
+| **[XGBoost](https://xgboost.readthedocs.io/)** | Gradient Boosting | Mô hình dự đoán trầm cảm (legacy) |
+| **[LightGBM](https://lightgbm.readthedocs.io/)** | Gradient Boosting nhanh | Training nhanh hơn XGBoost (legacy) |
 | **[Statsmodels](https://www.statsmodels.org/)** | Mô hình thống kê | Hồi quy, kiểm định, phân tích phương sai |
 | **[Factor Analyzer](https://github.com/EducationalTestingService/factor_analyzer)** | Phân tích nhân tố | Tìm yếu tố tiềm ẩn (stress, lo âu, cô đơn) |
 | **[Pingouin](https://pingouin-stats.org/)** | Kiểm định thống kê | ANOVA, T-test, tương quan - dễ dùng hơn scipy |
+
+**Core ML dependencies (transitive):** `numpy`, `pandas`, `joblib`, `scipy` — được cài tự động bởi các package trên.
 
 ### 🎯 Hyperparameter Optimization
 
@@ -309,19 +333,21 @@ uv run python main.py --stats
 uv run python main.py --models
 ```
 
-**Chạy:** Giai đoạn 0 + Giai đoạn 2-3 + Giai đoạn 7-8-9 (mô hình + fairness + threshold)
+**Chạy:** Giai đoạn 0 + Giai đoạn 2-3 + Giai đoạn 7-8-9-10-11 (4 mô hình + fairness + threshold + GAM viz + model comparison)
 
 | Giai đoạn | Nội dung | Output |
 |-----------|----------|--------|
 | **0** | Cảnh báo đạo đức | In console |
 | **2-3** | Rà soát dữ liệu | In console |
-| **7-8** | Huấn luyện 3 mô hình (Dummy, Logistic Regression, CatBoost) | `results/model_results_full.json` |
+| **7-8** | Huấn luyện **4 mô hình** (Dummy → Logistic → **GAM** → CatBoost) | `results/model_results_full.json` |
 | **9** | Fairness analysis — ROC-AUC, FPR, FNR theo Gender, Age group, Family History | In console — cảnh báo bias |
-| **8b** | Threshold analysis — thử 30 ngưỡng (0.20→0.80), khuyến nghị ngưỡng tối ưu | In console — khuyến nghị |
+| **8b** | Threshold analysis — thử 30 ngưỡng (0.20→0.80) cho **từng mô hình** | In console — khuyến nghị |
+| **10** | **GAM Visualizations** — partial dependence plots, feature effects summary | `results/gam_plots/*.html`, `results/gam_feature_effects.html`, `results/gam_interpretation.json` |
+| **11** | **Model Comparison** — McNemar's test, DeLong's test, calibration curves, decision curves | `results/model_comparison.html`, `results/calibration_curves.html`, `results/decision_curves.html`, `results/model_comparison_report.json` |
 
 **Không chạy:** EDA (không sinh biểu đồ), thống kê mô tả (Giai đoạn 4)
 
-**Dùng khi:** Đã có EDA rồi, giờ muốn xây dựng mô hình và đánh giá. ~15-25 giây.
+**Dùng khi:** Đã có EDA rồi, giờ muốn xây dựng mô hình và đánh giá toàn diện. ~30-60 giây.
 
 ---
 
@@ -331,7 +357,7 @@ uv run python main.py --models
 uv run python main.py --full
 ```
 
-**Chạy: TẤT CẢ** — Giai đoạn 0 → 1 → 2-3 → 4 → 7-8-9
+**Chạy: TẤT CẢ** — Giai đoạn 0 → 1 → 2-3 → 4 → 7-8-9-10-11
 
 | Giai đoạn | Nội dung | Output |
 |-----------|----------|--------|
@@ -339,11 +365,13 @@ uv run python main.py --full
 | **1** | EDA — 6 biểu đồ | 6 file HTML + 1 JSON |
 | **2-3** | Rà soát dữ liệu | In console |
 | **4** | Thống kê mô tả theo nhóm | In console |
-| **7-8** | 3 mô hình | `results/model_results_full.json` |
+| **7-8** | **4 mô hình** (Dummy → Logistic → GAM → CatBoost) | `results/model_results_full.json` |
 | **9** | Fairness analysis | In console |
 | **8b** | Threshold analysis | In console |
+| **10** | GAM Visualizations | `results/gam_plots/*.html`, `results/gam_feature_effects.html`, `results/gam_interpretation.json` |
+| **11** | Model Comparison | `results/model_comparison.html`, `results/calibration_curves.html`, `results/decision_curves.html`, `results/model_comparison_report.json` |
 
-**Dùng khi:** Muốn chạy trọn vẹn từ đầu đến cuối — sinh báo cáo hoàn chỉnh. ~20-40 giây.
+**Dùng khi:** Muốn chạy trọn vẹn từ đầu đến cuối — sinh báo cáo hoàn chỉnh. ~40-90 giây.
 
 ---
 
@@ -496,19 +524,19 @@ uv run python main.py --models --no-ethical
 
 ### Bảng tổng hợp
 
-| Flag | EDA | Stats | Models | Fairness | Threshold | Leakage | Review | Standardize | FAMD | Split | Thời gian ~ |
-|------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| *(không flag)* | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
-| `--eda` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
-| `--review` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ | 2-3s |
-| `--standardize` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | 2-3s |
-| `--stats` | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 5-10s |
-| `--famd` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | 10s |
-| `--split` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | 3s |
-| `--models` | ❌ | ❌ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | 15-25s |
-| `--leakage` | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | 5-10s |
-| `--full` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ | 20-40s |
-| `--no-ethical` | — | — | — | — | — | — | — | — | — | — | Bỏ cảnh báo |
+| Flag | EDA | Stats | Models (4) | GAM Viz | Model Comp | Fairness | Threshold | Leakage | Review | Standardize | FAMD | Split | Thời gian ~ |
+|------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| *(không flag)* | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
+| `--eda` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
+| `--review` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ | 2-3s |
+| `--standardize` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | 2-3s |
+| `--stats` | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 5-10s |
+| `--famd` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | 10s |
+| `--split` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | 3s |
+| `--models` | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | 30-60s |
+| `--leakage` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | 5-10s |
+| `--full` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ | 40-90s |
+| `--no-ethical` | — | — | — | — | — | — | — | — | — | — | — | — | Bỏ cảnh báo |
 
 ### Flag bổ trợ
 
@@ -535,8 +563,19 @@ uv run python main.py --full --conservative      # Toàn bộ pipeline, Phiên b
 | `--famd` | 5 HTML | Eigenvalues, top biến đóng góp theo PC, phương sai tích lũy |
 | `--split` | 1 JSON (`split_report.json`) | Kích thước train/test, phân phối target, KS test |
 | `--leakage` | 1 JSON (`leakage_investigation.json`) | Odds Ratio, Stress Test, Cross-Tab, Synthetic Check |
-| `--models` | 1 JSON (`model_results_*.json`) | 3 mô hình (Dummy, LR, CatBoost), Fairness, Threshold |
-| `--full` | 6 HTML + 3-4 JSON | **Tất cả** các output trên |
+| `--models` | 1 JSON + **10+ HTML** + 2 JSON | 4 mô hình, Fairness, Threshold, **GAM plots**, **Model comparison charts** |
+| `--full` | **16+ HTML** + 5-6 JSON | **Tất cả** các output trên |
+
+**Chi tiết file từ `--models` và `--full`:**
+- `results/model_results_*.json` — metrics của 4 mô hình
+- `results/gam_plots/gam_partial_dependence_*.html` — partial dependence plots (top 8 features)
+- `results/gam_plots/gam_partial_dependence_combined.html` — combined GAM plots
+- `results/gam_feature_effects.html` — feature importance ranking
+- `results/gam_interpretation.json` — GAM interpretation report
+- `results/model_comparison.html` — bar chart so sánh models
+- `results/calibration_curves.html` — calibration curves
+- `results/decision_curves.html` — decision curve analysis
+- `results/model_comparison_report.json` — McNemar's test, DeLong's test, rankings
 
 ### File khác
 
@@ -593,6 +632,26 @@ model = xgb.XGBClassifier(
 )
 model.fit(X_train, y_train)  # Tự động dùng GPU!
 ```
+
+### CatBoost - Tự Động GPU
+
+```python
+import torch
+from src.ml_models import DepressionRiskModeler
+
+# Pipeline tự động detect GPU cho CatBoost
+modeler = DepressionRiskModeler()
+results = modeler.run_full_pipeline(df)
+
+# Console output:
+# 💻 DEVICE INFO:
+#      ✅ GPU: NVIDIA GeForce GTX 1060 3GB
+#      ✅ CUDA: 12.6
+#      ✅ CatBoost sẽ dùng GPU acceleration
+```
+
+CatBoost sẽ **tự động bật GPU** nếu `torch.cuda.is_available() == True`.
+Không cần config thêm — pipeline tự detect và set `task_type='GPU'`.
 
 ### PyTorch - Code Giống Hệt CPU/GPU
 
@@ -678,6 +737,61 @@ fig = px.scatter(
 )
 fig.show()
 ```
+
+---
+
+## 🎯 GPU Usage Verification
+
+### Pipeline dùng GPU như thế nào?
+
+| Mô hình | Device | Lý do |
+|---------|--------|-------|
+| Dummy Baseline | CPU | Trivial model, không cần GPU |
+| Logistic Regression (sklearn) | CPU | scikit-learn không hỗ trợ GPU cho LR |
+| GAM (pygam) | CPU | pygam không hỗ trợ GPU |
+| **CatBoost** | **✅ GPU** | Hỗ trợ CUDA acceleration |
+
+### Cách kiểm tra GPU đang được dùng
+
+**Cách 1: Chạy script verify**
+```bash
+uv run python verify_gpu_usage.py
+```
+
+**Cách 2: Xem console output khi chạy `--models`**
+```
+💻 DEVICE INFO:
+     ✅ GPU: NVIDIA GeForce GTX 1060 3GB
+     ✅ CUDA: 12.6
+     ✅ CatBoost sẽ dùng GPU acceleration
+```
+
+**Cách 3: Monitor Task Manager**
+1. Chạy: `uv run python main.py --models`
+2. Mở Task Manager → Performance → GPU 0
+3. Xem GPU utilization tăng khi CatBoost training (30-60s)
+
+**Cách 4: Check log file**
+```powershell
+# Sau khi chạy --models, xem logs/analysis.log
+findstr /c:"CatBoost using device" /c:"GPU enabled" logs/analysis.log
+```
+
+Expected output:
+```
+CatBoost using device: GPU
+  ✅ CatBoost GPU enabled: NVIDIA GeForce GTX 1060 3GB
+```
+
+### Nếu GPU không được dùng
+
+**Kiểm tra:**
+```bash
+uv run python -c "import torch; print(torch.cuda.is_available())"
+```
+
+- Nếu `False` → Chạy lại `.\setup_with_gpu.ps1` với quyền Administrator
+- Nếu `True` nhưng CatBoost vẫn CPU → Kiểm tra log để debug
 
 ---
 
