@@ -278,6 +278,7 @@ def main(
     run_models: bool = False,
     run_leakage: bool = False,
     run_review: bool = False,
+    run_standardize: bool = False,
     conservative: bool = False,
 ):
     """
@@ -328,6 +329,14 @@ def main(
     if run_leakage:
         with Timer("Label Leakage Investigation"):
             run_leakage_investigation(df)
+
+    # ---- Giai đoạn chuẩn hóa (auto chạy kèm khi --review) ----
+    if run_standardize or run_review:
+        with Timer("Data Standardization"):
+            from src.data_processing import DataStandardizer
+            std = DataStandardizer()
+            df_std, std_report = std.standardize(df)
+            print(f"\n  ✅ Feature estimate: ~{std_report['feature_estimate']['total_estimated']} features")
 
     # ---- Giai đoạn 4: Statistical analysis ----
     if run_stats:
@@ -489,11 +498,13 @@ if __name__ == "__main__":
                         help="Dùng Phiên bản A — không có 'Suicidal thoughts'")
     parser.add_argument("--review", action="store_true",
                         help="Giai đoạn 2-3: Rà soát dữ liệu, phát hiện biến hằng số, missing, rare categories")
+    parser.add_argument("--standardize", action="store_true",
+                        help="Chuẩn hóa tên cột, giá trị categorical, phân loại biến, ước lượng feature matrix")
 
     args = parser.parse_args()
 
     # Default: nếu không có flag nào → chạy EDA
-    any_flag = args.eda or args.stats or args.models or args.leakage or args.full or args.review
+    any_flag = args.eda or args.stats or args.models or args.leakage or args.full or args.review or args.standardize
 
     try:
         if args.full:
@@ -503,6 +514,7 @@ if __name__ == "__main__":
                 run_stats=True,
                 run_models=True,
                 run_review=True,
+                run_standardize=True,
                 conservative=args.conservative,
             )
         elif any_flag:
@@ -513,6 +525,7 @@ if __name__ == "__main__":
                 run_models=args.models,
                 run_leakage=args.leakage,
                 run_review=args.review,
+                run_standardize=args.standardize,
                 conservative=args.conservative,
             )
         else:

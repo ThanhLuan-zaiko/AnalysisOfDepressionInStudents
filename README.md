@@ -243,7 +243,7 @@ Bước 6: Auto-fix nếu driver không khớp
 
 ## 🏃 Cách Chạy
 
-### Chi tiết 8 chế độ chạy của `main.py`
+### Chi tiết 9 chế độ chạy của `main.py`
 
 #### 1. Không flag (mặc định) = `--eda`
 
@@ -392,7 +392,34 @@ uv run python main.py --leakage
 
 ---
 
-#### 7. `--no-ethical`
+#### 8. `--standardize`
+
+```bash
+uv run python main.py --standardize
+```
+
+**Chạy:** Giai đoạn 0 + Chuẩn hóa biểu diễn dữ liệu
+
+| Giai đoạn | Nội dung | Output |
+|-----------|----------|--------|
+| **0** | Cảnh báo đạo đức | In console |
+| **Chuẩn hóa** | 3 bước: rename cột → chuẩn hóa giá trị → phân loại biến | In console — báo cáo chi tiết |
+
+**Không chạy:** EDA, review, stats, models, leakage
+
+**Dùng khi:** Muốn xem dataset sẽ trông như thế nào sau khi chuẩn hóa, và biết trước feature matrix sẽ có bao nhiêu cột. ~2-3 giây.
+
+**Báo cáo bao gồm:**
+- **Rename cột** — tên cũ → tên mới (snake_case tiếng Việt không dấu)
+- **Chuẩn hóa giá trị** — Male→Nam, Yes→Co, Less than 5 hours→Duoi_5h, ...
+- **Phân loại biến** — ID, Target, Numeric, Ordinal, Nominal
+- **Ước lượng feature matrix** — ~104 features sau encoding (3 numeric + 7 ordinal + 94 one-hot)
+
+**💡 Mẹo:** `--review` tự động chạy kèm standardize, không cần gõ cả 2 flag.
+
+---
+
+#### 9. `--no-ethical`
 
 ```bash
 uv run python main.py --models --no-ethical
@@ -410,16 +437,17 @@ uv run python main.py --models --no-ethical
 
 ### Bảng tổng hợp
 
-| Flag | EDA (biểu đồ) | Stats | Models | Fairness | Threshold | Leakage | Review | Thời gian ~ |
-|------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| *(không flag)* | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
-| `--eda` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
-| `--review` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | 2-3s |
-| `--stats` | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | 5-10s |
-| `--models` | ❌ | ❌ | ✅ | ✅ | ✅ | ❌ | ❌ | 15-25s |
-| `--leakage` | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | 5-10s |
-| `--full` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | 20-40s |
-| `--no-ethical` | — | — | — | — | — | — | — | Bỏ cảnh báo |
+| Flag | EDA (biểu đồ) | Stats | Models | Fairness | Threshold | Leakage | Review | Standardize | Thời gian ~ |
+|------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| *(không flag)* | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
+| `--eda` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
+| `--review` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | 2-3s |
+| `--standardize` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | 2-3s |
+| `--stats` | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 5-10s |
+| `--models` | ❌ | ❌ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | 15-25s |
+| `--leakage` | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | 5-10s |
+| `--full` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | 20-40s |
+| `--no-ethical` | — | — | — | — | — | — | — | — | Bỏ cảnh báo |
 
 ### Flag bổ trợ
 
@@ -427,6 +455,7 @@ uv run python main.py --models --no-ethical
 |------|----------|----------|
 | `--conservative` | Dùng **Phiên bản A** — không có biến `Suicidal thoughts` (an toàn, không rủi ro rò rỉ nhãn) | `--models`, `--full` |
 | `--no-ethical` | Bỏ qua cảnh báo đạo đức ở Giai đoạn 0 | Mọi flag |
+| `--standardize` | Chuẩn hóa tên cột + giá trị + phân loại biến | Đứng riêng hoặc kèm `--review`, `--full` |
 
 **Ví dụ:**
 ```bash
