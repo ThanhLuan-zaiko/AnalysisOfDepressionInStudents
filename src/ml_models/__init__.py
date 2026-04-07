@@ -14,6 +14,7 @@ from .explainer import SHAPExplainer
 from .imbalanced import ImbalancedDataHandler
 from .risk_model import DepressionRiskModeler
 from .leakage_check import LabelLeakageInvestigator
+from .famd import FAMDAnalyzer
 
 __all__ = [
     "DepressionPredictor",
@@ -22,4 +23,5 @@ __all__ = [
     "ImbalancedDataHandler",
     "DepressionRiskModeler",
     "LabelLeakageInvestigator",
+    "FAMDAnalyzer",
 ]

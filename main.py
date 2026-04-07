@@ -279,6 +279,7 @@ def main(
     run_leakage: bool = False,
     run_review: bool = False,
     run_standardize: bool = False,
+    run_famd: bool = False,
     conservative: bool = False,
 ):
     """
@@ -337,6 +338,11 @@ def main(
             std = DataStandardizer()
             df_std, std_report = std.standardize(df)
             print(f"\n  ✅ Feature estimate: ~{std_report['feature_estimate']['total_estimated']} features")
+
+    # ---- Giai đoạn FAMD ----
+    if run_famd:
+        with Timer("FAMD Analysis"):
+            run_famd_analysis(df)
 
     # ---- Giai đoạn 4: Statistical analysis ----
     if run_stats:
@@ -563,6 +569,30 @@ def run_statistical_analysis(df: pl.DataFrame):
                 print(f"  {col:<40s} {'ERROR':>14s} {str(e)[:30]:>30s}")
 
 
+def run_famd_analysis(df: pl.DataFrame):
+    """FAMD — Giảm chiều dữ liệu hỗn hợp + biểu đồ."""
+    from src.ml_models import FAMDAnalyzer
+
+    analyzer = FAMDAnalyzer()
+
+    results = analyzer.run_famd(
+        df,
+        n_components=10,
+        excluded_cols=EXCLUDED_COLUMNS,
+        target_col="Depression",
+        verbose=True,
+    )
+
+    # Lưu biểu đồ
+    print("\n  📊 Lưu biểu đồ FAMD...")
+    saved = analyzer.save_all_plots(
+        output_dir="results/visualizations/",
+        save_html=True,
+    )
+    for name, path in saved.items():
+        print(f"     ✅ {name}: {path}")
+
+
 def run_leakage_investigation(df: pl.DataFrame):
     """Điều tra rò rỉ nhãn từ Suicidal thoughts."""
     from src.ml_models import LabelLeakageInvestigator
@@ -674,11 +704,13 @@ if __name__ == "__main__":
                         help="Giai đoạn 2-3: Rà soát dữ liệu, phát hiện biến hằng số, missing, rare categories")
     parser.add_argument("--standardize", action="store_true",
                         help="Chuẩn hóa tên cột, giá trị categorical, phân loại biến, ước lượng feature matrix")
+    parser.add_argument("--famd", action="store_true",
+                        help="FAMD — Giảm chiều dữ liệu hỗn hợp (numeric + categorical), biểu đồ, top biến đóng góp")
 
     args = parser.parse_args()
 
     # Default: nếu không có flag nào → chạy EDA
-    any_flag = args.eda or args.stats or args.models or args.leakage or args.full or args.review or args.standardize
+    any_flag = args.eda or args.stats or args.models or args.leakage or args.full or args.review or args.standardize or args.famd
 
     try:
         if args.full:
@@ -689,6 +721,7 @@ if __name__ == "__main__":
                 run_models=True,
                 run_review=True,
                 run_standardize=True,
+                run_famd=False,
                 conservative=args.conservative,
             )
         elif any_flag:
@@ -700,6 +733,7 @@ if __name__ == "__main__":
                 run_leakage=args.leakage,
                 run_review=args.review,
                 run_standardize=args.standardize,
+                run_famd=args.famd,
                 conservative=args.conservative,
             )
         else:

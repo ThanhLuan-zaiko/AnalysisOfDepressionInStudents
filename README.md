@@ -243,7 +243,7 @@ Bước 6: Auto-fix nếu driver không khớp
 
 ## 🏃 Cách Chạy
 
-### Chi tiết 9 chế độ chạy của `main.py`
+### Chi tiết 10 chế độ chạy của `main.py`
 
 #### 1. Không flag (mặc định) = `--eda`
 
@@ -427,7 +427,33 @@ uv run python main.py --standardize
 
 ---
 
-#### 9. `--no-ethical`
+#### 9. `--famd`
+
+```bash
+uv run python main.py --famd
+```
+
+**Chạy:** Giai đoạn 0 + FAMD (Factor Analysis of Mixed Data)
+
+| Giai đoạn | Nội dung | Output |
+|-----------|----------|--------|
+| **0** | Cảnh báo đạo đức | In console |
+| **FAMD** | Giảm chiều dữ liệu hỗn hợp (numeric + categorical) | 5 biểu đồ HTML + console |
+
+**Không chạy:** EDA, stats, models, leakage
+
+**Dùng khi:** Muốn hiểu cấu trúc tiềm ẩn của dữ liệu — biến nào nhóm lại với nhau, sample nào cụm lại, cần bao nhiêu chiều để giữ 80% phương sai. ~10 giây.
+
+**Kết quả bao gồm:**
+- **Scree plot** — phương sai giải thích bởi mỗi thành phần
+- **Correlation circle** — biến numeric nào tương quan với PC nào
+- **Sample projection** — phân bố mẫu trên mặt phẳng PC, tô màu trầm cảm
+- **Top contributing variables** — biến nào đóng góp nhiều nhất vào mỗi PC
+- **Bảng eigenvalues** — eigenvalue, variance %, cumulative %
+
+---
+
+#### 10. `--no-ethical`
 
 ```bash
 uv run python main.py --models --no-ethical
@@ -445,17 +471,18 @@ uv run python main.py --models --no-ethical
 
 ### Bảng tổng hợp
 
-| Flag | EDA (biểu đồ) | Stats | Models | Fairness | Threshold | Leakage | Review | Standardize | Thời gian ~ |
-|------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| *(không flag)* | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
-| `--eda` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
-| `--review` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | 2-3s |
-| `--standardize` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | 2-3s |
-| `--stats` | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 5-10s |
-| `--models` | ❌ | ❌ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | 15-25s |
-| `--leakage` | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | 5-10s |
-| `--full` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | 20-40s |
-| `--no-ethical` | — | — | — | — | — | — | — | — | Bỏ cảnh báo |
+| Flag | EDA (biểu đồ) | Stats | Models | Fairness | Threshold | Leakage | Review | Standardize | FAMD | Thời gian ~ |
+|------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| *(không flag)* | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
+| `--eda` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
+| `--review` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | 2-3s |
+| `--standardize` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | 2-3s |
+| `--stats` | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 5-10s |
+| `--famd` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | 10s |
+| `--models` | ❌ | ❌ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | 15-25s |
+| `--leakage` | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | 5-10s |
+| `--full` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ | 20-40s |
+| `--no-ethical` | — | — | — | — | — | — | — | — | — | Bỏ cảnh báo |
 
 ### Flag bổ trợ
 

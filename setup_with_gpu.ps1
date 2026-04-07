@@ -311,7 +311,8 @@ $commonPackages = @(
     "statsmodels",
     "factor_analyzer",
     "pingouin",
-    
+    "prince",
+
     # Online Learning (River alternative - works with Python 3.14)
     "vowpalwabbit",
     
