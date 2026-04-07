@@ -64,3 +64,10 @@ catboost_training.log
 # Generated data artifacts (auto-generated, do NOT commit)
 results/
 logs/
+
+# Rust
+rust_engine/target/
+*.pdb
+
+# maturin build
+ maturin-build/

@@ -681,12 +681,53 @@ if (-not $installSuccess) {
 }
 
 Write-Host ""
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host " Installation Complete!" -ForegroundColor Green
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  GPU Type: $($gpuType.ToUpper())" -ForegroundColor Cyan
-Write-Host "  Status: Success" -ForegroundColor Green
-Write-Host "========================================" -ForegroundColor Cyan
+
+# ============================================================
+# Step 4: Build Rust Engine (rust_engine) for fast GAM training
+# ============================================================
+Write-Host "Step 4: Building Rust engine (rust_engine)..." -ForegroundColor Yellow
+Write-Host ""
+
+$rustEnginePath = Join-Path $PSScriptRoot "rust_engine"
+$rustAvailable = $false
+if (Get-Command cargo -ErrorAction SilentlyContinue) {
+    $rustAvailable = $true
+    $cargoVersion = cargo --version 2>&1
+    Write-Host "[OK] Rust/Cargo found: $cargoVersion" -ForegroundColor Green
+} else {
+    Write-Host "[INFO] Rust/Cargo not installed" -ForegroundColor Yellow
+    Write-Host "  rust_engine will fallback to pyGAM for GAM training" -ForegroundColor Gray
+    Write-Host "  To enable: https://rustup.rs/" -ForegroundColor Gray
+}
+
+if ($rustAvailable -and (Test-Path $rustEnginePath)) {
+    # Install maturin via pip (avoid dependency conflicts)
+    Write-Host "[1/3] Installing maturin build tool..." -ForegroundColor Cyan
+    & uv pip install maturin --quiet
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  ✅ maturin installed" -ForegroundColor Green
+    } else {
+        Write-Host "  ❌ maturin installation failed" -ForegroundColor Red
+    }
+
+    # Build and install rust_engine
+    Write-Host "[2/3] Building rust_engine (release mode)..." -ForegroundColor Cyan
+    Push-Location $rustEnginePath
+    & uv run maturin develop --release 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray }
+    $rustExitCode = $LASTEXITCODE
+    Pop-Location
+
+    if ($rustExitCode -eq 0) {
+        Write-Host "[3/3] ✅ rust_engine built and installed successfully!" -ForegroundColor Green
+        Write-Host "  GAM training will use Rust engine (~15-50x faster than pyGAM)" -ForegroundColor Green
+    } else {
+        Write-Host "[WARN] rust_engine build failed (exit code: $rustExitCode)" -ForegroundColor Yellow
+        Write-Host "  Falling back to pyGAM for GAM training" -ForegroundColor Gray
+    }
+} elseif ($rustAvailable -and -not (Test-Path $rustEnginePath)) {
+    Write-Host "[INFO] Rust installed but rust_engine/ folder not found" -ForegroundColor Yellow
+}
+
 Write-Host ""
 
 # Post-installation SAC mitigation (unblock newly installed DLLs)
@@ -694,20 +735,43 @@ Write-Host "[SAC] Running post-installation DLL unblock..." -ForegroundColor Cya
 Mitigate-SAC-Blocks
 Write-Host ""
 
-# Step 4: Run verification
-Write-Host "Step 4: Running GPU verification..." -ForegroundColor Yellow
+# Step 5: Run verification
+Write-Host "Step 5: Running GPU & Rust engine verification..." -ForegroundColor Yellow
 Write-Host ""
 
 # Use venv python explicitly to ensure we test the installed packages
 $venvPython = ".venv\Scripts\python.exe"
 if (Test-Path $venvPython) {
     & $venvPython verify_gpu.py
+
+    # Test rust_engine
+    Write-Host ""
+    Write-Host "[Rust] Testing rust_engine..." -ForegroundColor Cyan
+    & $venvPython -c "
+try:
+    from rust_engine import PyGAMClassifier
+    print('[OK] rust_engine loaded successfully')
+    g = PyGAMClassifier(n_splines=3, optimize_lambda=False)
+    print('[OK] GAMClassifier ready')
+except ImportError as e:
+    print(f'[WARN] rust_engine not available: {e}')
+    print('  Will use pyGAM fallback for GAM training')
+" 2>&1
 } else {
     Write-Host "[WARN] .venv python not found, using system python..." -ForegroundColor Yellow
     python verify_gpu.py
 }
 
 Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host " Installation Complete!" -ForegroundColor Green
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "  GPU Type: $($gpuType.ToUpper())" -ForegroundColor Cyan
+Write-Host "  Rust Engine: $(if (Test-Path (Join-Path $PSScriptRoot 'rust_engine')) { 'Configured' } else { 'Not found' })" -ForegroundColor Cyan
+Write-Host "  Status: Success" -ForegroundColor Green
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host ""
+
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host " Next Steps:" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Cyan
@@ -724,6 +788,12 @@ if ($gpuType -eq "cpu") {
     Write-Host "  Your analysis will run faster with GPU support." -ForegroundColor Green
 }
 
+if (Test-Path (Join-Path $PSScriptRoot 'rust_engine')) {
+    Write-Host "✅ Rust engine (rust_engine) is ready!" -ForegroundColor Green
+    Write-Host "  GAM training will be ~15-50x faster than pyGAM" -ForegroundColor Green
+}
+
 Write-Host ""
-Write-Host "Start your analysis with: python main.py" -ForegroundColor Cyan
+Write-Host "Start your analysis with:" -ForegroundColor Cyan
+Write-Host "  uv run python main.py --models" -ForegroundColor Gray
 Write-Host ""

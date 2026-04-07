@@ -46,6 +46,10 @@ dependencies = [
     "torchaudio>=2.11.0",
 ]
 
+# Local Rust engine (rust_engine) — built via maturin
+[tool.uv.sources]
+rust_engine = { path = "rust_engine", editable = true }
+
 # PyTorch CUDA index
 [[tool.uv.index]]
 name = "pytorch-cu126"

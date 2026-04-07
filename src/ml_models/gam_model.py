@@ -124,21 +124,99 @@ class GAMClassifier:
         feature_names: List[str],
         n_splines: int = 10,
         optimize_splines: bool = True,
+        use_rust: bool = True,  # New: try Rust engine first
     ) -> Dict:
         """
         Huấn luyện GAM model.
-        
-        Args:
-            X: Feature matrix
-            y: Target vector (binary)
-            feature_types: Dict mapping feature name to type
-            feature_names: List of feature names (ordered as in X)
-            n_splines: Số spline bases
-            optimize_splines: Có tự động optimize smoothing parameter không
-            
-        Returns:
-            Dict chứa metrics
+
+        Ưu tiên dùng Rust engine (nhanh hơn). Fallback về pyGAM nếu Rust không có.
         """
+        # Try Rust engine first
+        if use_rust:
+            try:
+                return self._train_rust(X, y, feature_types, feature_names, n_splines, optimize_splines)
+            except Exception as e:
+                logger.warning(f"Rust engine failed ({e}), falling back to pyGAM...")
+
+        # Fallback to pyGAM
+        return self._train_python(X, y, feature_types, feature_names, n_splines, optimize_splines)
+
+    def _train_rust(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        feature_types: Dict[str, str],
+        feature_names: List[str],
+        n_splines: int,
+        optimize_splines: bool,
+    ) -> Dict:
+        """Train using Rust engine — fast, parallel CV."""
+        from rust_engine import PyGAMClassifier, cross_validate_gam
+
+        # Convert feature_types dict to ordered lists
+        rust_feature_types = []
+        rust_feature_names = []
+        for name in feature_names:
+            ftype = feature_types.get(name, 'numeric')
+            rust_feature_types.append(ftype)
+            rust_feature_names.append(name)
+
+        logger.info(f"Training GAM with Rust engine: {len(feature_names)} features, {X.shape[0]} samples...")
+
+        # Cross-validation (parallel)
+        cv_result = cross_validate_gam(
+            X.astype(np.float64),
+            y.astype(np.float64),
+            rust_feature_types,
+            rust_feature_names,
+            n_splits=5,
+            n_splines=n_splines,
+            random_seed=self.random_state,
+        )
+
+        # Fit final model on full data
+        self.model = PyGAMClassifier(n_splines=n_splines, optimize_lambda=optimize_splines)
+        fit_result = self.model.fit(
+            X.astype(np.float64),
+            y.astype(np.float64),
+            rust_feature_types,
+            rust_feature_names,
+        )
+
+        self.feature_types = feature_types
+        self.feature_names = feature_names
+
+        # Compile metrics
+        metrics = {
+            "roc_auc": cv_result["mean_roc_auc"],
+            "roc_auc_std": cv_result["std_roc_auc"],
+            "pr_auc": cv_result["mean_pr_auc"],
+            "pr_auc_std": cv_result["std_pr_auc"],
+            "f1": cv_result["mean_f1"],
+            "f1_std": cv_result["std_f1"],
+            "recall": cv_result["mean_recall"],
+            "precision": cv_result["mean_precision"],
+            "brier_score": cv_result["mean_brier_score"],
+            "feature_importance": fit_result.get("feature_importance", []),
+            "n_splines": n_splines,
+            "optimize_splines": optimize_splines,
+            "_engine": "rust",
+        }
+
+        self.results = metrics
+        logger.info(f"GAM (Rust): ROC-AUC={metrics['roc_auc']:.4f}, F1={metrics['f1']:.4f}")
+        return metrics
+
+    def _train_python(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        feature_types: Dict[str, str],
+        feature_names: List[str],
+        n_splines: int,
+        optimize_splines: bool,
+    ) -> Dict:
+        """Train using pyGAM — fallback when Rust is unavailable."""
         try:
             from pygam import LogisticGAM
         except ImportError:
@@ -233,20 +311,21 @@ class GAMClassifier:
     
     def _compute_feature_importance(self, X: np.ndarray) -> List[Dict]:
         """
-        Tính feature importance dựa trên variance của partial dependence.
-        Feature có effect lớn hơn → variance của partial dependence cao hơn.
+        Tính feature importance. 
+        - Rust engine: đã tính sẵn trong fit_result
+        - pyGAM: tính từ partial dependence variance
         """
+        # If Rust engine, feature_importance already computed
+        if self.results.get("_engine") == "rust":
+            return self.results.get("feature_importance", [])
+
+        # pyGAM fallback
         importance_list = []
-        
         for i, feat_name in enumerate(self.feature_names):
             try:
-                # Partial dependence cho feature i
                 XX = self.model.generate_X_grid(term=i)
                 partial_dependence = self.model.partial_dependence(term=i, X=XX)
-                
-                # Variance của effect = measure của importance
                 effect_variance = float(np.var(partial_dependence['partial_dependence']))
-                
                 importance_list.append({
                     "feature": feat_name,
                     "variance_importance": round(effect_variance, 6),
@@ -581,12 +660,17 @@ class GAMClassifier:
         """Predict class labels."""
         if self.model is None:
             raise ValueError("Model not trained yet.")
+        if self.results.get("_engine") == "rust":
+            proba = self.model.predict_proba(X.astype(np.float64), [], [])
+            return (proba >= 0.5).astype(int)
         return self.model.predict(X)
-    
+
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
         """Predict class probabilities."""
         if self.model is None:
             raise ValueError("Model not trained yet.")
+        if self.results.get("_engine") == "rust":
+            return self.model.predict_proba(X.astype(np.float64), [], [])
         return self.model.predict_proba(X)
     
     def save_model(self, filepath: str):
