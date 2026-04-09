@@ -119,6 +119,47 @@ function Mitigate-SAC-Blocks {
     }
 }
 
+function Invoke-LoggedNativeCommand {
+    param(
+        [scriptblock]$Command,
+        [string]$Indent = "    ",
+        [ConsoleColor]$Color = [ConsoleColor]::Gray
+    )
+
+    # Some build tools log progress to stderr; don't let PowerShell treat that as a fatal error.
+    $previousErrorActionPreference = $ErrorActionPreference
+    $hasNativeCommandPreference = $null -ne (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue)
+    if ($hasNativeCommandPreference) {
+        $previousNativeCommandPreference = $PSNativeCommandUseErrorActionPreference
+    }
+
+    try {
+        $script:ErrorActionPreference = "Continue"
+        if ($hasNativeCommandPreference) {
+            $script:PSNativeCommandUseErrorActionPreference = $false
+        }
+
+        & $Command 2>&1 | ForEach-Object {
+            $line = if ($_ -is [System.Management.Automation.ErrorRecord]) {
+                $_.ToString()
+            } else {
+                "$_"
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($line)) {
+                Write-Host "$Indent$line" -ForegroundColor $Color
+            }
+        }
+
+        return $LASTEXITCODE
+    } finally {
+        $script:ErrorActionPreference = $previousErrorActionPreference
+        if ($hasNativeCommandPreference) {
+            $script:PSNativeCommandUseErrorActionPreference = $previousNativeCommandPreference
+        }
+    }
+}
+
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host " GPU Detection & Package Setup Script" -ForegroundColor Cyan
 Write-Host " Windows Edition (Admin Mode)" -ForegroundColor Yellow
@@ -594,6 +635,7 @@ switch ($gpuType) {
         }
 
         # Step 1: Install base PyTorch (CPU) first - required for IPEX
+        $baseTorchInstalled = $false
         Write-Host "  Step 1: Installing base PyTorch..." -ForegroundColor Gray
         & uv pip install torch torchvision torchaudio --no-deps
         $baseExitCode = $LASTEXITCODE
@@ -606,20 +648,38 @@ switch ($gpuType) {
                 Write-Host "  ❌ All installation attempts failed" -ForegroundColor Red
                 return
             }
+            $baseTorchInstalled = $true
+        } else {
+            $baseTorchInstalled = $true
         }
 
-        # Step 2: Install Intel Extension for PyTorch (IPEX) for XPU support
-        Write-Host "  Step 2: Installing Intel Extension for PyTorch (IPEX)..." -ForegroundColor Gray
-        & uv add intel-extension-for-pytorch
-        $ipexExitCode = $LASTEXITCODE
+        $pythonMinorVersion = $null
+        if (Test-Path ".venv\Scripts\python.exe") {
+            $pythonVersionText = & .venv\Scripts\python.exe -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
+            if ($pythonVersionText -match "^3\.(\d+)$") {
+                $pythonMinorVersion = [int]$Matches[1]
+            }
+        }
 
-        if ($ipexExitCode -eq 0) {
-            $installSuccess = $true
-            Write-Host "  ✅ IPEX installed successfully" -ForegroundColor Green
+        if ($pythonMinorVersion -and $pythonMinorVersion -gt 13) {
+            Write-Host "  [INFO] Intel Extension for PyTorch currently has no wheels for Python 3.$pythonMinorVersion" -ForegroundColor Yellow
+            Write-Host "  Using CPU-only PyTorch from Step 1" -ForegroundColor Yellow
+            Write-Host "  For Intel XPU support, use Python 3.12 or 3.13" -ForegroundColor Yellow
+            $gpuType = "cpu"
+            $installSuccess = $baseTorchInstalled
+        } else {
+            # Step 2: Install Intel Extension for PyTorch (IPEX) for XPU support
+            Write-Host "  Step 2: Installing Intel Extension for PyTorch (IPEX)..." -ForegroundColor Gray
+            & uv add intel-extension-for-pytorch
+            $ipexExitCode = $LASTEXITCODE
 
-            # Verify XPU
-            Write-Host "  Verifying XPU functionality..." -ForegroundColor Gray
-            $testOutput = & .venv\Scripts\python.exe -c "
+            if ($ipexExitCode -eq 0) {
+                $installSuccess = $true
+                Write-Host "  ✅ IPEX installed successfully" -ForegroundColor Green
+
+                # Verify XPU
+                Write-Host "  Verifying XPU functionality..." -ForegroundColor Gray
+                $testOutput = & .venv\Scripts\python.exe -c "
 import torch
 try:
     import intel_extension_for_pytorch as ipex
@@ -631,22 +691,30 @@ except ImportError:
     print('ipex_not_found')
 " 2>&1
 
-            if ($testOutput -match "xpu_available") {
-                Write-Host "  ✅ Intel XPU verification PASSED!" -ForegroundColor Green
-            } elseif ($testOutput -match "xpu_fallback_to_cpu") {
-                Write-Host "  ⚠️  IPEX installed but XPU not available - will use CPU" -ForegroundColor Yellow
-                Write-Host "  This is expected for Intel Iris/UHD integrated GPUs" -ForegroundColor Yellow
+                if ($testOutput -match "xpu_available") {
+                    Write-Host "  ✅ Intel XPU verification PASSED!" -ForegroundColor Green
+                } elseif ($testOutput -match "xpu_fallback_to_cpu") {
+                    Write-Host "  ⚠️  IPEX installed but XPU not available - will use CPU" -ForegroundColor Yellow
+                    Write-Host "  This is expected for Intel Iris/UHD integrated GPUs" -ForegroundColor Yellow
+                    $gpuType = "cpu"
+                } else {
+                    Write-Host "  ⚠️  IPEX import failed - check Intel driver installation" -ForegroundColor Yellow
+                }
             } else {
-                Write-Host "  ⚠️  IPEX import failed - check Intel driver installation" -ForegroundColor Yellow
+                Write-Host "  ⚠️  IPEX installation failed" -ForegroundColor Yellow
+                Write-Host "  Will use CPU-only PyTorch (Intel GPU acceleration unavailable)" -ForegroundColor Yellow
+                Write-Host ""
+                Write-Host "  To enable Intel GPU support:" -ForegroundColor Yellow
+                Write-Host "  1. Install Intel Arc drivers: https://www.intel.com/content/www/us/en/support/articles/000005630/graphics.html" -ForegroundColor Yellow
+                Write-Host "  2. Ensure you have Intel Arc discrete GPU (Iris/UHD have limited support)" -ForegroundColor Yellow
+                Write-Host "  3. Try: pip install intel-extension-for-pytorch" -ForegroundColor Yellow
+
+                if ($baseTorchInstalled) {
+                    Write-Host "  CPU-only PyTorch from Step 1 is already available" -ForegroundColor Yellow
+                    $gpuType = "cpu"
+                    $installSuccess = $true
+                }
             }
-        } else {
-            Write-Host "  ⚠️  IPEX installation failed" -ForegroundColor Yellow
-            Write-Host "  Will use CPU-only PyTorch (Intel GPU acceleration unavailable)" -ForegroundColor Yellow
-            Write-Host ""
-            Write-Host "  To enable Intel GPU support:" -ForegroundColor Yellow
-            Write-Host "  1. Install Intel Arc drivers: https://www.intel.com/content/www/us/en/support/articles/000005630/graphics.html" -ForegroundColor Yellow
-            Write-Host "  2. Ensure you have Intel Arc discrete GPU (Iris/UHD have limited support)" -ForegroundColor Yellow
-            Write-Host "  3. Try: pip install intel-extension-for-pytorch" -ForegroundColor Yellow
         }
     }
     "cpu" {
@@ -713,8 +781,7 @@ if ($rustAvailable -and (Test-Path $rustEnginePath)) {
     # Build and install rust_engine
     Write-Host "[2/3] Building rust_engine (release mode)..." -ForegroundColor Cyan
     Push-Location $rustEnginePath
-    & uv run maturin develop --release 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray }
-    $rustExitCode = $LASTEXITCODE
+    $rustExitCode = Invoke-LoggedNativeCommand -Command { uv run maturin develop --release }
     Pop-Location
 
     if ($rustExitCode -eq 0) {
