@@ -232,10 +232,11 @@ class DepressionRiskModeler:
 
     def train_dummy(self, X: np.ndarray, y: np.ndarray) -> Dict:
         """
-        Model 0: Dummy classifier — luôn dự đoán lớp đa số.
-        Mục đích: tránh ảo tưởng mô hình phức tạp làm tốt hơn baseline.
+        Model 0: Stratified Dummy classifier — dự đoán theo phân phối class trong training set.
+        Mục đích: baseline công bằng hơn so với most_frequent (luôn đoán lớp đa số).
+        Giúp đánh giá xem mô hình có thực sự học được pattern hay chỉ đoán theo prior.
         """
-        dummy = DummyClassifier(strategy="most_frequent", random_state=self.random_state)
+        dummy = DummyClassifier(strategy="stratified", random_state=self.random_state)
 
         cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=self.random_state)
         cv_results = cross_validate(
@@ -397,11 +398,13 @@ class DepressionRiskModeler:
 
         gam = GAMClassifier(random_state=self.random_state)
 
+        # Tăng n_splines từ 10 lên 15 để capture nonlinear tốt hơn
+        # Với block-diagonal P-IRLS đã tối ưu, việc tăng splines không còn chậm
         metrics = gam.train(
             X, y,
             feature_types=feature_types,
             feature_names=feature_names,
-            n_splines=n_splines,
+            n_splines=15,
             optimize_splines=True,
         )
 
@@ -589,19 +592,13 @@ class DepressionRiskModeler:
         model = self.models[model_name]
         X, y, feature_names = self.prepare_features(df, include_suicidal=include_suicidal)
 
-        # Nếu là GAM, chỉ lấy các features đã chọn khi train
-        if model_name == "gam" and "gam_feature_indices" in self.preprocessors and self.preprocessors["gam_feature_indices"] is not None:
-            X_input = X[:, self.preprocessors["gam_feature_indices"]]
-        else:
-            X_input = X
-
-        y_pred_obj = model.predict_proba(X_input)
+        y_pred_obj = model.predict_proba(X)
         if y_pred_obj.ndim == 2:
             y_proba = y_pred_obj[:, 1]
         else:
             y_proba = y_pred_obj
-        
-        y_pred = model.predict(X_input)
+
+        y_pred = model.predict(X)
         if y_pred.ndim > 1:
             y_pred = y_pred.flatten()
 
@@ -726,7 +723,10 @@ class DepressionRiskModeler:
         Phân tích ngưỡng quyết định: thử nhiều ngưỡng khác nhau
         và báo cáo trade-off giữa recall, precision, FPR, FNR.
 
-        Quan trọng: Ngưỡng mặc định 0.5 không phải lúc nào cũng tối ưu.
+        Bao gồm:
+        - Youden's J statistic (tối ưu sensitivity + specificity)
+        - F1-optimal threshold
+        - Cost-based analysis (giả định FN cost = 2× FP cost)
         """
         if model_name not in self.models:
             raise ValueError(f"Model '{model_name}' not found.")
@@ -734,19 +734,17 @@ class DepressionRiskModeler:
         model = self.models[model_name]
         X, y, _ = self.prepare_features(df, include_suicidal=include_suicidal)
 
-        # Nếu là GAM, chỉ lấy các features đã chọn khi train
-        if model_name == "gam" and "gam_feature_indices" in self.preprocessors and self.preprocessors["gam_feature_indices"] is not None:
-            X_input = X[:, self.preprocessors["gam_feature_indices"]]
-        else:
-            X_input = X
-
-        y_pred_obj = model.predict_proba(X_input)
+        y_pred_obj = model.predict_proba(X)
         if y_pred_obj.ndim == 2:
             y_proba = y_pred_obj[:, 1]
         else:
             y_proba = y_pred_obj
 
-        thresholds = np.arange(0.2, 0.8, 0.02)
+        # Compute base metrics
+        n_pos = y.sum()
+        n_neg = len(y) - n_pos
+
+        thresholds = np.arange(0.1, 0.9, 0.01)
         rows = []
 
         for thresh in thresholds:
@@ -756,24 +754,53 @@ class DepressionRiskModeler:
             if cm.shape == (2, 2):
                 tn, fp, fn, tp = cm.ravel()
                 recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+                specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
                 precision = tp / (tp + fp) if (tp + fp) > 0 else 0
                 f1 = 2 * recall * precision / (recall + precision) if (recall + precision) > 0 else 0
                 fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
                 fnr = fn / (fn + tp) if (fn + tp) > 0 else 0
+                youden_j = recall + specificity - 1
                 n_flagged = y_pred.sum()
+
+                # Cost-based: assume FN cost = 2× FP cost (bỏ sót trầm cảm nguy hiểm hơn báo động giả)
+                fn_cost_weight = 2.0
+                total_cost = fn_cost_weight * fn + fp
+                cost_per_sample = total_cost / len(y)
 
                 rows.append({
                     "threshold": round(thresh, 2),
                     "recall": round(recall, 4),
+                    "specificity": round(specificity, 4),
                     "precision": round(precision, 4),
                     "f1": round(f1, 4),
                     "fpr": round(fpr, 4),
                     "fnr": round(fnr, 4),
+                    "youden_j": round(youden_j, 4),
+                    "total_cost": int(total_cost),
+                    "cost_per_sample": round(cost_per_sample, 4),
                     "n_flagged": int(n_flagged),
                     "flagged_pct": round(n_flagged / len(y) * 100, 1),
                 })
 
-        return pl.DataFrame(rows)
+        result_df = pl.DataFrame(rows)
+
+        # Find optimal thresholds
+        if len(result_df) > 0:
+            youden_row = result_df.sort("youden_j", descending=True).head(1)
+            f1_row = result_df.sort("f1", descending=True).head(1)
+            cost_row = result_df.sort("cost_per_sample").head(1)
+
+            # Store optimal thresholds for later use
+            self.results[f"{model_name}_optimal_thresholds"] = {
+                "youden_j": float(youden_row["threshold"][0]),
+                "youden_j_value": float(youden_row["youden_j"][0]),
+                "f1_optimal": float(f1_row["threshold"][0]),
+                "f1_optimal_value": float(f1_row["f1"][0]),
+                "cost_optimal": float(cost_row["threshold"][0]),
+                "cost_optimal_value": float(cost_row["cost_per_sample"][0]),
+            }
+
+        return result_df
 
     def print_threshold_report(
         self,
@@ -794,15 +821,33 @@ class DepressionRiskModeler:
         label = label_map.get(model_name, model_name)
         print(f"\n  🎯 PHÂN TÍCH NGƯỠNG QUYẾT ĐỊNH — {label}:")
         print()
-        print("  Threshold | Recall | Precision |   F1   |  FPR   |  FNR   | Flagged")
-        print("  " + "-" * 68)
 
-        for row in df_thresh.iter_rows(named=True):
+        # Show optimal thresholds first
+        opt_key = f"{model_name}_optimal_thresholds"
+        if opt_key in self.results:
+            opt = self.results[opt_key]
+            print(f"  📊 Ngưỡng tối ưu:")
+            print(f"     Youden's J (balance recall + specificity): threshold = {opt['youden_j']:.2f} (J = {opt['youden_j_value']:.4f})")
+            print(f"     F1-optimal:                                threshold = {opt['f1_optimal']:.2f} (F1 = {opt['f1_optimal_value']:.4f})")
+            print(f"     Cost-optimal (FN=2×FP):                    threshold = {opt['cost_optimal']:.2f} (cost/sample = {opt['cost_optimal_value']:.4f})")
+            print()
+
+        print("  Threshold | Recall | Spec.  | Precision |   F1   |  FPR   |  FNR   | Flagged")
+        print("  " + "-" * 78)
+
+        # Show subset: 0.2 to 0.7 with step 0.05 for readability
+        display = df_thresh.filter(
+            (pl.col("threshold") >= 0.2) & (pl.col("threshold") <= 0.7) &
+            ((pl.col("threshold") * 100).cast(pl.Int32) % 5 == 0)
+        )
+        if display.height == 0:
+            display = df_thresh.head(10)
+
+        for row in display.iter_rows(named=True):
             marker = " ←" if abs(row["threshold"] - 0.5) < 0.01 else ""
-            print(f"    {row['threshold']:.2f}      | {row['recall']:.4f} | {row['precision']:.4f}    | {row['f1']:.4f} | {row['fpr']:.4f} | {row['fnr']:.4f} | {row['flagged_pct']:.1f}%{marker}")
+            print(f"    {row['threshold']:.2f}      | {row['recall']:.4f} | {row['specificity']:.4f} | {row['precision']:.4f}    | {row['f1']:.4f} | {row['fpr']:.4f} | {row['fnr']:.4f} | {row['flagged_pct']:.1f}%{marker}")
 
         # Khuyến nghị ngưỡng
-        # Ngưỡng ưu tiên recall (sàng lọc): FNR < 0.15
         low_fnr = df_thresh.filter(pl.col("fnr") < 0.15)
         if low_fnr.height > 0:
             best = low_fnr.sort("f1", descending=True).row(0, named=True)
@@ -810,10 +855,19 @@ class DepressionRiskModeler:
             print(f"     Recall = {best['recall']:.4f}, Precision = {best['precision']:.4f}, F1 = {best['f1']:.4f}")
             print(f"     FNR = {best['fnr']:.4f} (bỏ sót {best['fnr']*100:.1f}% cao trầm cảm)")
 
-        # Ngưỡng cân bằng: F1 cao nhất
         best_f1 = df_thresh.sort("f1", descending=True).row(0, named=True)
         print(f"\n  💡 Khuyến nghị ngưỡng cân bằng (F1 max): threshold = {best_f1['threshold']:.2f}")
         print(f"     F1 = {best_f1['f1']:.4f}, Recall = {best_f1['recall']:.4f}, Precision = {best_f1['precision']:.4f}")
+
+        # Cost-based recommendation
+        if opt_key in self.results:
+            cost_thresh = self.results[opt_key]["cost_optimal"]
+            cost_row = df_thresh.filter((pl.col("threshold") - cost_thresh).abs() < 0.01).head(1)
+            if cost_row.height > 0:
+                r = cost_row.row(0, named=True)
+                print(f"\n  💡 Khuyến nghị ngưỡng tối ưu chi phí (FN=2×FP): threshold = {r['threshold']:.2f}")
+                print(f"     Recall = {r['recall']:.4f}, Precision = {r['precision']:.4f}")
+                print(f"     Chi phí trung bình: {r['cost_per_sample']:.4f}/mẫu")
 
     # ==========================================
     # 📝 COMPARISON & REPORT
@@ -977,40 +1031,23 @@ class DepressionRiskModeler:
         # 4. Model 2: GAM
         if run_gam:
             with Timer("GAM Training"):
-                print("\n  🎨 [3/4] Model 2: GAM - Generalized Additive Model (using Top 15 features)...")
-                
-                # Lấy Top 15 features từ Logistic Regression để train GAM
-                if "logistic" in self.results:
-                    coef_df = self._extract_coefficients(self.models["logistic"], feature_names)
-                    top_features = coef_df["feature"].head(15).to_list()
-                    
-                    # Lọc X và feature_names cho GAM
-                    feat_idx_map = {name: i for i, name in enumerate(feature_names)}
-                    top_indices = [feat_idx_map[name] for name in top_features if name in feat_idx_map]
-                    self.preprocessors["gam_feature_indices"] = top_indices # Lưu lại indices
-                    X_gam = X[:, top_indices]
-                    names_gam = [feature_names[i] for i in top_indices]
-                    
-                    # Lấy feature_types an toàn (tự tạo nếu chưa có)
-                    if "gam_feature_types" in self.preprocessors:
-                        types_gam = {name: self.preprocessors["gam_feature_types"].get(name, 'numeric') for name in names_gam}
-                    else:
-                        # Tự động phát hiện loại biến cho top features
-                        types_gam = {}
-                        for name in names_gam:
-                            if '=' in name:
-                                types_gam[name] = 'nominal'
-                            elif name in NOMINAL_COLUMNS:
-                                types_gam[name] = 'nominal'
-                            elif name in ORDINAL_COLUMNS:
-                                types_gam[name] = 'ordinal'
-                            else:
-                                types_gam[name] = 'numeric'
-                else:
-                    X_gam, names_gam, types_gam = X, feature_names, None
-                    self.preprocessors["gam_feature_indices"] = None
+                print("\n  🎨 [3/4] Model 2: GAM - Generalized Additive Model (full features)...")
 
-                self.train_gam(X_gam, y, names_gam, feature_types=types_gam)
+                # Train GAM trên toàn bộ features (Rust engine đã được tối ưu)
+                # Tự động phát hiện feature types
+                types_gam = {}
+                for name in feature_names:
+                    if '=' in name:
+                        types_gam[name] = 'nominal'
+                    elif name in NOMINAL_COLUMNS:
+                        types_gam[name] = 'nominal'
+                    elif name in ORDINAL_COLUMNS:
+                        types_gam[name] = 'ordinal'
+                    else:
+                        types_gam[name] = 'numeric'
+
+                self.preprocessors["gam_feature_indices"] = None  # Dùng full features
+                self.train_gam(X, y, feature_names, feature_types=types_gam)
         else:
             print("\n  ⏭️  Bỏ qua GAM (run_gam=False)")
 
@@ -1024,20 +1061,8 @@ class DepressionRiskModeler:
         for name in ["logistic", "gam", "catboost"]:
             if name in self.models:
                 model = self.models[name]
-                
-                # Nếu là GAM, chỉ lấy các features đã chọn
-                if name == "gam" and "gam_feature_indices" in self.preprocessors and self.preprocessors["gam_feature_indices"] is not None:
-                    X_input = X[:, self.preprocessors["gam_feature_indices"]]
-                else:
-                    X_input = X
-                    
-                y_pred_obj = model.predict_proba(X_input)
-                # Xử lý mảng 1D vs 2D
-                if y_pred_obj.ndim == 2:
-                    y_proba = y_pred_obj[:, 1]
-                else:
-                    y_proba = y_pred_obj
-                    
+                y_pred_obj = model.predict_proba(X)
+                y_proba = y_pred_obj[:, 1] if y_pred_obj.ndim == 2 else y_pred_obj
                 cal = self.calibration_analysis(y, y_proba, name.upper())
                 print(f"     {name.upper()}: Brier score = {cal['brier_score']:.4f}")
 

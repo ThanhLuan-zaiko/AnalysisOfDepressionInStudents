@@ -4,7 +4,7 @@ use nalgebra::{DVector, DMatrix};
 use std::collections::HashMap;
 
 use crate::bspline::{create_basis_matrix, create_penalty_matrix, FeatureType};
-use crate::pirls::{pirls_logistic, find_best_lambda, gcv_score, logistic};
+use crate::pirls::{pirls_logistic_block, FeatureBlock, find_best_lambda, gcv_score, logistic};
 
 /// Kết quả training GAM
 #[derive(Debug, Clone)]
@@ -53,8 +53,12 @@ impl GAMClassifier {
         feature_names: Vec<String>,
         n_splines: usize,
     ) -> Self {
-        // Reduced lambda grid for speed
-        let lambda_grid: Vec<f64> = vec![0.001, 0.01, 0.1, 1.0, 10.0, 100.0];
+        // Lambda grid: tập trung vùng quan trọng 0.001-100.0
+        // Loại bỏ các giá trị quá lớn (500+) gây over-regularization
+        let lambda_grid: Vec<f64> = vec![
+            0.001, 0.005, 0.01, 0.05, 0.1,
+            0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0,
+        ];
 
         GAMClassifier {
             feature_types,
@@ -89,12 +93,13 @@ impl GAMClassifier {
             _ => FeatureType::Numeric,
         }).collect();
 
-        let (design_matrix, col_ranges, x_ranges_vec, penalties_vec) = 
-            Self::build_design_matrix_static(x_data, n_samples, n_features, &types, self.n_splines, self.spline_degree);
+        let (design_matrix, col_ranges, x_ranges_vec, penalties_vec, expanded_names) =
+            Self::build_design_matrix_static(x_data, n_samples, n_features, &types, feature_names, self.n_splines, self.spline_degree);
 
         self.feature_col_ranges = col_ranges;
         self.x_ranges = x_ranges_vec;
         self.penalties = penalties_vec;
+        self.feature_names = expanded_names;
 
         let y = DVector::from_vec(y_data.to_vec());
         let n = design_matrix.nrows();
@@ -118,14 +123,34 @@ impl GAMClassifier {
 
         self.lambdas = best_lambdas;
 
-        // Step 2: Combined penalty with per-feature lambdas
-        let combined_penalty = self.build_combined_penalty(design_matrix.ncols());
+        // Step 2: Build FeatureBlock array for block-diagonal P-IRLS
+        // QUAN TRỌNG: truyền lambda tối ưu cho mỗi feature
+        let blocks: Vec<FeatureBlock> = self.feature_col_ranges.iter().enumerate().map(|(idx, &(cs, ce))| {
+            FeatureBlock {
+                col_start: cs,
+                n_cols: ce - cs,
+                penalty: self.penalties[idx].clone(),
+                lambda: self.lambdas.get(idx).copied().unwrap_or(1.0),
+            }
+        }).collect();
 
-        let result = pirls_logistic(
-            &design_matrix,
-            &y,
-            &combined_penalty,
-            1.0,
+        // Step 3: Block-diagonal P-IRLS — tối ưu cho nhiều features
+        // Dùng design matrix (đã mở rộng splines), không phải raw input
+        // QUAN TRỌNG: DMatrix stores column-major, but pirls_logistic_block expects
+        // row-major (row i: [i*p, i*p+1, ..., i*p+p-1]). Convert explicitly.
+        let total_cols = design_matrix.ncols();
+        let mut row_major = Vec::with_capacity(n_samples * total_cols);
+        for i in 0..n_samples {
+            for j in 0..total_cols {
+                row_major.push(design_matrix[(i, j)]);
+            }
+        }
+        let result = pirls_logistic_block(
+            &row_major,
+            y_data,
+            n_samples,
+            total_cols,
+            &blocks,
             200,
             1e-7,
         );
@@ -164,12 +189,14 @@ impl GAMClassifier {
         n_samples: usize,
         n_features: usize,
         feature_types: &[FeatureType],
+        feature_names: &[String],
         n_splines: usize,
         spline_degree: usize,
-    ) -> (DMatrix<f64>, Vec<(usize, usize)>, Vec<(f64, f64)>, Vec<DMatrix<f64>>) {
+    ) -> (DMatrix<f64>, Vec<(usize, usize)>, Vec<(f64, f64)>, Vec<DMatrix<f64>>, Vec<String>) {
         let mut col_ranges = Vec::new();
         let mut x_ranges_vec = Vec::new();
         let mut penalties_vec = Vec::new();
+        let mut expanded_names = Vec::new();
         let mut total_cols = 0;
 
         // First pass: count total columns
@@ -222,6 +249,16 @@ impl GAMClassifier {
                     x_ranges_vec.push((x_min, x_max));
                     penalties_vec.push(penalty);
 
+                    // Store expanded name for this feature
+                    let orig_name = if feat_idx < feature_names.len() {
+                        feature_names[feat_idx].clone()
+                    } else {
+                        format!("feature_{}", feat_idx)
+                    };
+                    // For numeric/ordinal, all spline columns belong to one feature
+                    // Store name once (will be used for importance aggregation)
+                    expanded_names.push(orig_name.clone());
+
                     // Copy basis vào matrix
                     for i in 0..n_samples {
                         for j in 0..n_basis {
@@ -238,6 +275,12 @@ impl GAMClassifier {
                         sorted
                     };
 
+                    let orig_name = if feat_idx < feature_names.len() {
+                        feature_names[feat_idx].clone()
+                    } else {
+                        format!("feature_{}", feat_idx)
+                    };
+
                     for level_idx in 0..unique_vals.len() {
                         for i in 0..n_samples {
                             matrix[(i, col_offset)] = if (feature_vals[i] - unique_vals[level_idx]).abs() < 1e-10 {
@@ -249,35 +292,15 @@ impl GAMClassifier {
                         col_ranges.push((col_offset, col_offset + 1));
                         x_ranges_vec.push((0.0, 1.0));
                         penalties_vec.push(DMatrix::zeros(1, 1));
+                        // Store expanded name for each level
+                        expanded_names.push(format!("{} [level {}]", orig_name, level_idx));
                         col_offset += 1;
                     }
                 }
             }
         }
 
-        (matrix, col_ranges, x_ranges_vec, penalties_vec)
-    }
-
-    fn build_combined_penalty(&self, total_cols: usize) -> DMatrix<f64> {
-        let mut penalty = DMatrix::zeros(total_cols, total_cols);
-
-        for feat_idx in 0..self.feature_col_ranges.len() {
-            let (start, end) = self.feature_col_ranges[feat_idx];
-            let n_cols = end - start;
-            let p = &self.penalties[feat_idx];
-            let lambda = self.lambdas[feat_idx];
-
-            if p.nrows() == n_cols && p.ncols() == n_cols {
-                let block = p.scale(lambda);
-                for i in 0..n_cols {
-                    for j in 0..n_cols {
-                        penalty[(start + i, start + j)] += block[(i, j)];
-                    }
-                }
-            }
-        }
-
-        penalty
+        (matrix, col_ranges, x_ranges_vec, penalties_vec, expanded_names)
     }
 
     pub fn predict_proba_raw(
@@ -295,15 +318,24 @@ impl GAMClassifier {
             _ => FeatureType::Numeric,
         }).collect();
 
-        let (design_matrix, _, _, _) = 
-            Self::build_design_matrix_static(x_data, n_samples, n_features, &types, self.n_splines, self.spline_degree);
+        let (design_matrix, _, _, _, _) =
+            Self::build_design_matrix_static(x_data, n_samples, n_features, &types, _feature_names, self.n_splines, self.spline_degree);
 
         let beta = match &self.coefficients {
             Some(b) => b,
             None => return vec![0.5; n_samples],
         };
 
-        let eta = design_matrix * beta;
+        // Dimension safety: handle mismatch between training and prediction features
+        let n_p = design_matrix.ncols();
+        let p = n_p.min(beta.len());
+        let eta = if p == n_p {
+            design_matrix * beta
+        } else {
+            let dt = design_matrix.columns(0, p);
+            let bt = beta.rows(0, p);
+            &dt * &bt
+        };
         eta.iter().map(|&e| logistic(e + self.intercept)).collect()
     }
 
@@ -316,18 +348,39 @@ impl GAMClassifier {
         design_matrix: &DMatrix<f64>,
         coefficients: &DVector<f64>,
     ) -> Vec<FeatureImportance> {
+        let n = design_matrix.nrows();
+        let n_ranges = self.feature_col_ranges.len();
+        let n_names = self.feature_names.len();
+
         let mut importance = Vec::new();
 
-        for feat_idx in 0..self.feature_col_ranges.len() {
-            let (col_start, col_end) = self.feature_col_ranges[feat_idx];
+        for range_idx in 0..n_ranges {
+            let (col_start, col_end) = self.feature_col_ranges[range_idx];
             let n_cols = col_end - col_start;
-            let feat_name = if feat_idx < self.feature_names.len() {
-                self.feature_names[feat_idx].clone()
+
+            // Map range index to feature name
+            // Nếu n_ranges == n_names: 1-to-1 mapping
+            // Nếu n_ranges > n_names: cần map ranges về original features
+            let feat_name = if n_ranges == n_names {
+                // Simple case: mỗi range = 1 feature
+                self.feature_names[range_idx].clone()
+            } else if range_idx < n_names {
+                // Fallback: dùng tên gốc nếu index hợp lệ
+                self.feature_names[range_idx].clone()
             } else {
-                format!("feature_{}", feat_idx)
+                // Nominal feature đã được expand: group về feature gốc
+                // Tìm feature gốc bằng cách scan backwards
+                let mut orig_idx = n_names - 1;
+                for oi in (0..n_names).rev() {
+                    // Heuristic: tìm feature gốc gần nhất
+                    if oi <= range_idx {
+                        orig_idx = oi;
+                        break;
+                    }
+                }
+                format!("{} (level)", self.feature_names[orig_idx.min(n_names - 1)])
             };
 
-            let n = design_matrix.nrows();
             let mut contribution = DVector::zeros(n);
             for i in 0..n {
                 let mut val = 0.0;
@@ -338,11 +391,10 @@ impl GAMClassifier {
             }
 
             let variance = variance_of_vector(&contribution);
-
             importance.push(FeatureImportance {
                 feature: feat_name,
                 variance_importance: variance,
-                term_index: feat_idx,
+                term_index: range_idx,
             });
         }
 
@@ -357,8 +409,11 @@ fn compute_roc_auc(y_true: &[f64], y_score: &[f64]) -> f64 {
     let n = y_true.len();
     if n < 2 { return 0.5; }
     
-    let mut pairs: Vec<(f64, f64)> = y_score.iter().zip(y_true.iter()).map(|(&s, &l)| (s, l)).collect();
-    pairs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+    let mut pairs: Vec<(f64, f64)> = y_score.iter().zip(y_true.iter())
+        .map(|(&s, &l)| (s, l))
+        .filter(|&(s, _)| !s.is_nan())
+        .collect();
+    pairs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     
     let mut n_pos = 0f64;
     for &(_, l) in &pairs { if l >= 0.5 { n_pos += 1.0; } }
@@ -388,7 +443,7 @@ fn compute_pr_auc(y_true: &[f64], y_score: &[f64]) -> f64 {
 
     let mut pairs: Vec<(f64, f64)> = y_score.iter().zip(y_true.iter())
         .map(|(&s, &l)| (s, l)).collect();
-    pairs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+    pairs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
     let n_pos: f64 = y_true.iter().filter(|&&l| l >= 0.5).count() as f64;
     if n_pos == 0.0 { return 0.0; }

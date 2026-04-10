@@ -5,7 +5,7 @@ use pyo3::types::{PyList, PyDict};
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods, IntoPyArray};
 
 use crate::gam::GAMClassifier;
-use crate::cross_val::run_cross_validation;
+use crate::cross_val::{run_cross_validation_cached, build_cached_design_matrix};
 
 /// Python wrapper cho GAMClassifier
 #[pyclass]
@@ -134,13 +134,13 @@ impl PyGAMClassifier {
 }
 
 #[pyfunction]
-#[pyo3(signature = (x, y, feature_types, feature_names, n_splits=5, n_splines=10, random_seed=42))]
+#[pyo3(signature = (x, y, feature_types, _feature_names, n_splits=5, n_splines=10, random_seed=42))]
 pub fn cross_validate_gam<'py>(
     py: Python<'py>,
     x: PyReadonlyArray2<'py, f64>,
     y: PyReadonlyArray1<'py, f64>,
     feature_types: Vec<String>,
-    feature_names: Vec<String>,
+    _feature_names: Vec<String>,
     n_splits: usize,
     n_splines: usize,
     random_seed: u64,
@@ -156,15 +156,20 @@ pub fn cross_validate_gam<'py>(
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Cannot read y array: {}", e))
     })?;
 
-    let cv_result = run_cross_validation(
+    // OPTIMIZATION: Build design matrix once, reuse across folds
+    let cached = build_cached_design_matrix(
         x_slice,
-        y_slice,
         n_samples,
         n_features,
         &feature_types,
-        &feature_names,
-        n_splits,
         n_splines,
+        3,
+    );
+
+    let cv_result = run_cross_validation_cached(
+        &cached,
+        y_slice,
+        n_splits,
         random_seed,
     );
 
