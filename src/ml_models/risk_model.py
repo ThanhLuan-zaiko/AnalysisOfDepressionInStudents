@@ -37,6 +37,7 @@ from sklearn.calibration import calibration_curve, CalibratedClassifierCV
 import logging
 import json
 from datetime import datetime
+from src.utils import Timer
 
 logger = logging.getLogger(__name__)
 
@@ -587,8 +588,22 @@ class DepressionRiskModeler:
 
         model = self.models[model_name]
         X, y, feature_names = self.prepare_features(df, include_suicidal=include_suicidal)
-        y_proba = model.predict_proba(X)[:, 1]
-        y_pred = model.predict(X)
+
+        # Nếu là GAM, chỉ lấy các features đã chọn khi train
+        if model_name == "gam" and "gam_feature_indices" in self.preprocessors and self.preprocessors["gam_feature_indices"] is not None:
+            X_input = X[:, self.preprocessors["gam_feature_indices"]]
+        else:
+            X_input = X
+
+        y_pred_obj = model.predict_proba(X_input)
+        if y_pred_obj.ndim == 2:
+            y_proba = y_pred_obj[:, 1]
+        else:
+            y_proba = y_pred_obj
+        
+        y_pred = model.predict(X_input)
+        if y_pred.ndim > 1:
+            y_pred = y_pred.flatten()
 
         # Định nghĩa subgroups
         subgroups = {}
@@ -718,7 +733,18 @@ class DepressionRiskModeler:
 
         model = self.models[model_name]
         X, y, _ = self.prepare_features(df, include_suicidal=include_suicidal)
-        y_proba = model.predict_proba(X)[:, 1]
+
+        # Nếu là GAM, chỉ lấy các features đã chọn khi train
+        if model_name == "gam" and "gam_feature_indices" in self.preprocessors and self.preprocessors["gam_feature_indices"] is not None:
+            X_input = X[:, self.preprocessors["gam_feature_indices"]]
+        else:
+            X_input = X
+
+        y_pred_obj = model.predict_proba(X_input)
+        if y_pred_obj.ndim == 2:
+            y_proba = y_pred_obj[:, 1]
+        else:
+            y_proba = y_pred_obj
 
         thresholds = np.arange(0.2, 0.8, 0.02)
         rows = []
@@ -939,30 +965,79 @@ class DepressionRiskModeler:
         print(f"     Class distribution: {(y == 1).sum()} positive, {(y == 0).sum()} negative")
 
         # 2. Model 0: Dummy
-        print("\n  🎯 [1/4] Model 0: Dummy Baseline...")
-        self.train_dummy(X, y)
+        with Timer("Dummy Baseline"):
+            print("\n  🎯 [1/4] Model 0: Dummy Baseline...")
+            self.train_dummy(X, y)
 
         # 3. Model 1: Logistic Regression
-        print("\n  📈 [2/4] Model 1: Logistic Regression (trung tâm)...")
-        self.train_logistic(X, y, feature_names)
+        with Timer("Logistic Regression"):
+            print("\n  📈 [2/4] Model 1: Logistic Regression (trung tâm)...")
+            self.train_logistic(X, y, feature_names)
 
         # 4. Model 2: GAM
         if run_gam:
-            print("\n  🎨 [3/4] Model 2: GAM - Generalized Additive Model...")
-            self.train_gam(X, y, feature_names)
+            with Timer("GAM Training"):
+                print("\n  🎨 [3/4] Model 2: GAM - Generalized Additive Model (using Top 15 features)...")
+                
+                # Lấy Top 15 features từ Logistic Regression để train GAM
+                if "logistic" in self.results:
+                    coef_df = self._extract_coefficients(self.models["logistic"], feature_names)
+                    top_features = coef_df["feature"].head(15).to_list()
+                    
+                    # Lọc X và feature_names cho GAM
+                    feat_idx_map = {name: i for i, name in enumerate(feature_names)}
+                    top_indices = [feat_idx_map[name] for name in top_features if name in feat_idx_map]
+                    self.preprocessors["gam_feature_indices"] = top_indices # Lưu lại indices
+                    X_gam = X[:, top_indices]
+                    names_gam = [feature_names[i] for i in top_indices]
+                    
+                    # Lấy feature_types an toàn (tự tạo nếu chưa có)
+                    if "gam_feature_types" in self.preprocessors:
+                        types_gam = {name: self.preprocessors["gam_feature_types"].get(name, 'numeric') for name in names_gam}
+                    else:
+                        # Tự động phát hiện loại biến cho top features
+                        types_gam = {}
+                        for name in names_gam:
+                            if '=' in name:
+                                types_gam[name] = 'nominal'
+                            elif name in NOMINAL_COLUMNS:
+                                types_gam[name] = 'nominal'
+                            elif name in ORDINAL_COLUMNS:
+                                types_gam[name] = 'ordinal'
+                            else:
+                                types_gam[name] = 'numeric'
+                else:
+                    X_gam, names_gam, types_gam = X, feature_names, None
+                    self.preprocessors["gam_feature_indices"] = None
+
+                self.train_gam(X_gam, y, names_gam, feature_types=types_gam)
         else:
             print("\n  ⏭️  Bỏ qua GAM (run_gam=False)")
 
         # 5. Model 3: CatBoost
-        print("\n  🌲 [4/4] Model 3: CatBoost (dự báo bổ sung)...")
-        self.train_catboost(X, y, feature_names)
+        with Timer("CatBoost Training"):
+            print("\n  🌲 [4/4] Model 3: CatBoost (dự báo bổ sung)...")
+            self.train_catboost(X, y, feature_names)
 
         # 6. Calibration
         print("\n  📊 Calibration Analysis...")
         for name in ["logistic", "gam", "catboost"]:
             if name in self.models:
                 model = self.models[name]
-                y_proba = model.predict_proba(X)[:, 1]
+                
+                # Nếu là GAM, chỉ lấy các features đã chọn
+                if name == "gam" and "gam_feature_indices" in self.preprocessors and self.preprocessors["gam_feature_indices"] is not None:
+                    X_input = X[:, self.preprocessors["gam_feature_indices"]]
+                else:
+                    X_input = X
+                    
+                y_pred_obj = model.predict_proba(X_input)
+                # Xử lý mảng 1D vs 2D
+                if y_pred_obj.ndim == 2:
+                    y_proba = y_pred_obj[:, 1]
+                else:
+                    y_proba = y_pred_obj
+                    
                 cal = self.calibration_analysis(y, y_proba, name.upper())
                 print(f"     {name.upper()}: Brier score = {cal['brier_score']:.4f}")
 

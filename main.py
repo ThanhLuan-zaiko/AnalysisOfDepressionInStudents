@@ -32,8 +32,8 @@ from src.utils import setup_logging, Timer, print_device_info
 
 logger = setup_logging(level="INFO", log_file="logs/analysis.log")
 
-# Đường dẫn dataset thực tế
-DATASET_PATH = "Student_Depression_Dataset.csv"
+# Đường dẫn dataset mặc định
+DEFAULT_DATASET = "Student_Depression_Dataset.csv"
 
 # Các cột cần loại khỏi phân tích (phương sai thấp / định danh)
 EXCLUDED_COLUMNS = [
@@ -41,6 +41,31 @@ EXCLUDED_COLUMNS = [
     "Profession",            # 99.9% "Student"
     "Work Pressure",         # 99.99% = 0
     "Job Satisfaction",      # 99.98% = 0
+]
+
+# Cột mục tiêu
+TARGET_COLUMN = "Depression"
+
+# Các cột đặc trưng mong đợi trong dataset
+EXPECTED_NUMERIC_COLUMNS = [
+    "Age",
+    "CGPA",
+    "Work/Study Hours",
+]
+
+EXPECTED_ORDINAL_COLUMNS = [
+    "Academic Pressure",
+    "Study Satisfaction",
+    "Financial Stress",
+]
+
+EXPECTED_NOMINAL_COLUMNS = [
+    "Gender",
+    "City",
+    "Degree",
+    "Sleep Duration",
+    "Dietary Habits",
+    "Family History of Mental Illness",
 ]
 
 
@@ -257,21 +282,44 @@ def run_data_review(df: pl.DataFrame) -> dict:
 # HÀM CHÍNH
 # ==========================================
 
-def load_dataset() -> pl.DataFrame:
-    """Đọc dataset chính."""
-    csv_path = Path(DATASET_PATH)
+def load_dataset(dataset_path: str) -> pl.DataFrame:
+    """Đọc dataset từ đường dẫn chỉ định."""
+    csv_path = Path(dataset_path)
     if not csv_path.exists():
         raise FileNotFoundError(
-            f"Không tìm thấy {DATASET_PATH}. "
-            "Đảm bảo file nằm cùng cấp với main.py."
+            f"Không tìm thấy {dataset_path}. "
+            "Đảm bảo file tồn tại ở đường dẫn đã cung cấp."
         )
-    print(f"📂 Đang đọc: {DATASET_PATH}")
+    print(f"📂 Đang đọc: {dataset_path}")
     df = pl.read_csv(str(csv_path))
     print(f"   ✅ {df.height:,} dòng × {df.width} cột")
+
+    # Kiểm tra schema: xác nhận có cột mục tiêu và cảnh báo nếu thiếu đặc trưng
+    if TARGET_COLUMN not in df.columns:
+        raise ValueError(
+            f"Dataset thiếu cột mục tiêu '{TARGET_COLUMN}'. "
+            f"Các cột tìm thấy: {df.columns}"
+        )
+
+    expected_features = (
+        set(EXPECTED_NUMERIC_COLUMNS)
+        | set(EXPECTED_ORDINAL_COLUMNS)
+        | set(EXPECTED_NOMINAL_COLUMNS)
+    )
+    missing_features = expected_features - set(df.columns)
+    if missing_features:
+        print(
+            f"   ⚠️  Cảnh báo: Dataset thiếu {len(missing_features)} cột đặc trưng mong đợi: "
+            f"{sorted(missing_features)}"
+        )
+        found_ratio = len(expected_features - missing_features) / len(expected_features) * 100
+        print(f"   📊 Chỉ có {found_ratio:.0f}% đặc trưng mong đợi ({len(expected_features) - len(missing_features)}/{len(expected_features)})")
+
     return df
 
 
 def main(
+    dataset_path: str = DEFAULT_DATASET,
     run_ethical: bool = True,
     run_eda_flag: bool = False,
     run_stats: bool = False,
@@ -297,7 +345,7 @@ def main(
 
     # ---- Load data ----
     with Timer("Load data"):
-        df = load_dataset()
+        df = load_dataset(dataset_path)
 
     # ---- Giai đoạn 1: EDA ----
     if run_eda_flag:
@@ -772,8 +820,21 @@ def run_ml_pipeline(df: pl.DataFrame, conservative: bool = False):
         for model_name in ["dummy", "logistic", "gam", "catboost"]:
             if model_name in modeler.models:
                 model = modeler.models[model_name]
-                y_proba = model.predict_proba(X)[:, 1]
-                y_pred = model.predict(X)
+                
+                # Chỉ lấy đúng số lượng features tương ứng với mô hình
+                if model_name == "gam" and "gam_feature_indices" in modeler.preprocessors and modeler.preprocessors["gam_feature_indices"] is not None:
+                    X_input = X[:, modeler.preprocessors["gam_feature_indices"]]
+                else:
+                    X_input = X
+                
+                y_proba = model.predict_proba(X_input)
+                # Xử lý 1D/2D
+                if y_proba.ndim == 2:
+                    y_proba = y_proba[:, 1]
+                    
+                y_pred = model.predict(X_input)
+                if y_pred.ndim > 1:
+                    y_pred = y_pred.flatten()
                 
                 comparator.add_model(
                     name=model_name,
@@ -851,6 +912,8 @@ if __name__ == "__main__":
                         help="FAMD — Giảm chiều dữ liệu hỗn hợp (numeric + categorical), biểu đồ, top biến đóng góp")
     parser.add_argument("--split", action="store_true",
                         help="Chia tập train/test stratified — kiểm tra cân bằng phân phối")
+    parser.add_argument("--dataset", type=str, default=DEFAULT_DATASET,
+                        help="Đường dẫn đến tệp dataset (mặc định: Student_Depression_Dataset.csv)")
 
     args = parser.parse_args()
 
@@ -860,6 +923,7 @@ if __name__ == "__main__":
     try:
         if args.full:
             main(
+                dataset_path=args.dataset,
                 run_ethical=not args.no_ethical,
                 run_eda_flag=True,
                 run_stats=True,
@@ -872,6 +936,7 @@ if __name__ == "__main__":
             )
         elif any_flag:
             main(
+                dataset_path=args.dataset,
                 run_ethical=not args.no_ethical,
                 run_eda_flag=args.eda,
                 run_stats=args.stats,
@@ -886,6 +951,7 @@ if __name__ == "__main__":
         else:
             # Default: chỉ chạy EDA + ethical
             main(
+                dataset_path=args.dataset,
                 run_ethical=True,
                 run_eda_flag=True,
                 run_stats=False,

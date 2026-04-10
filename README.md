@@ -77,6 +77,9 @@ src/
 ```bash
 # Pipeline hoàn chỉnh với sample data
 uv run python main.py --sample
+
+# Hoặc phân tích tệp dữ liệu tùy chỉnh
+uv run python main.py --eda --dataset "du_lieu_cua_ban.csv"
 ```
 
 ### Yêu Cầu
