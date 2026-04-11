@@ -4,7 +4,7 @@ use nalgebra::{DVector, DMatrix};
 use std::collections::HashMap;
 
 use crate::bspline::{create_basis_matrix, create_penalty_matrix, FeatureType};
-use crate::pirls::{pirls_logistic_block, FeatureBlock, find_best_lambda, gcv_score, logistic};
+use crate::pirls::{pirls_logistic_block, gcv_score, logistic, FeatureBlock};
 
 /// Kết quả training GAM
 #[derive(Debug, Clone)]
@@ -53,11 +53,9 @@ impl GAMClassifier {
         feature_names: Vec<String>,
         n_splines: usize,
     ) -> Self {
-        // Lambda grid: tập trung vùng quan trọng 0.001-100.0
-        // Loại bỏ các giá trị quá lớn (500+) gây over-regularization
+        // Reasonable lambda grid — includes small values to allow learning
         let lambda_grid: Vec<f64> = vec![
-            0.001, 0.005, 0.01, 0.05, 0.1,
-            0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0,
+            0.01, 0.1, 1.0, 5.0, 10.0, 50.0, 100.0, 500.0,
         ];
 
         GAMClassifier {
@@ -101,62 +99,72 @@ impl GAMClassifier {
         self.penalties = penalties_vec;
         self.feature_names = expanded_names;
 
-        let y = DVector::from_vec(y_data.to_vec());
         let n = design_matrix.nrows();
+        let p = design_matrix.ncols();
 
-        // Step 1: Find best lambda per feature
-        let mut best_lambdas = Vec::new();
+        // Lambda grid: reasonable range for logistic GAM
+        let lambda_candidates = [1.0, 5.0, 10.0, 50.0, 100.0, 500.0];
 
-        for feat_idx in 0..n_features {
-            let (col_start, col_end) = self.feature_col_ranges[feat_idx];
-            let feat_cols = design_matrix.columns(col_start, col_end - col_start).clone_owned();
-            let penalty = &self.penalties[feat_idx];
-
-            let (best_lambda, _) = if self.optimize_lambda && !penalty.is_empty() && penalty.trace().abs() > 1e-12 {
-                find_best_lambda(&feat_cols, &y, penalty, &self.lambda_grid, 200, 1e-7)
-            } else {
-                (1.0, 0.0)
-            };
-
-            best_lambdas.push(best_lambda);
-        }
-
-        self.lambdas = best_lambdas;
-
-        // Step 2: Build FeatureBlock array for block-diagonal P-IRLS
-        // QUAN TRỌNG: truyền lambda tối ưu cho mỗi feature
-        let blocks: Vec<FeatureBlock> = self.feature_col_ranges.iter().enumerate().map(|(idx, &(cs, ce))| {
-            FeatureBlock {
-                col_start: cs,
-                n_cols: ce - cs,
-                penalty: self.penalties[idx].clone(),
-                lambda: self.lambdas.get(idx).copied().unwrap_or(1.0),
-            }
-        }).collect();
-
-        // Step 3: Block-diagonal P-IRLS — tối ưu cho nhiều features
-        // Dùng design matrix (đã mở rộng splines), không phải raw input
-        // QUAN TRỌNG: DMatrix stores column-major, but pirls_logistic_block expects
-        // row-major (row i: [i*p, i*p+1, ..., i*p+p-1]). Convert explicitly.
-        let total_cols = design_matrix.ncols();
-        let mut row_major = Vec::with_capacity(n_samples * total_cols);
-        for i in 0..n_samples {
-            for j in 0..total_cols {
-                row_major.push(design_matrix[(i, j)]);
+        // Convert design matrix to row-major for block solver
+        let mut design_data = Vec::with_capacity(n * p);
+        for i in 0..n {
+            for j in 0..p {
+                design_data.push(design_matrix[(i, j)]);
             }
         }
-        let result = pirls_logistic_block(
-            &row_major,
-            y_data,
-            n_samples,
-            total_cols,
-            &blocks,
-            200,
-            1e-7,
-        );
+
+        // Build FeatureBlocks
+        let build_blocks = |lambda: f64| -> Vec<FeatureBlock> {
+            self.feature_col_ranges.iter().enumerate().map(|(idx, &(cs, ce))| {
+                FeatureBlock {
+                    col_start: cs,
+                    n_cols: ce - cs,
+                    penalty: self.penalties[idx].clone(),
+                    lambda,
+                }
+            }).collect()
+        };
+
+        // FAST grid search: subsample to 5000 samples
+        let grid_n = n.min(5000);
+        let step = n / grid_n;
+        let mut grid_x_data = Vec::with_capacity(grid_n * p);
+        let mut grid_y = Vec::with_capacity(grid_n);
+        for i in (0..n).step_by(step) {
+            let ro = i * p;
+            for j in 0..p {
+                grid_x_data.push(design_data[ro + j]);
+            }
+            grid_y.push(y_data[i]);
+            if grid_y.len() >= grid_n { break; }
+        }
+        let grid_search_n = grid_y.len();
+
+        // Grid search — best GCV, don't require convergence (block solver may not converge formally)
+        let mut best_lambda = 10.0;
+        let mut best_gcv = f64::MAX;
+
+        for &lambda in &lambda_candidates {
+            let blocks = build_blocks(lambda);
+            let result = pirls_logistic_block(&grid_x_data, &grid_y, grid_search_n, p, &blocks, 30, 1e-4);
+            let gcv = gcv_score(result.log_likelihood, result.edf, grid_search_n);
+
+            if gcv < best_gcv {
+                best_gcv = gcv;
+                best_lambda = lambda;
+            }
+        }
+
+        // Store lambdas for reporting
+        self.lambdas = vec![best_lambda; n_features];
+
+        // Final fit with best lambda on FULL data
+        let final_blocks = build_blocks(best_lambda);
+        let result = pirls_logistic_block(&design_data, y_data, n, p, &final_blocks, 60, 1e-4);
 
         self.coefficients = Some(result.coefficients.clone());
 
+        // Predict using original x_data for compatibility
         let proba = self.predict_proba_raw(x_data, n_samples, n_features, feature_types, feature_names);
 
         let roc_auc = compute_roc_auc(y_data, &proba);
@@ -164,7 +172,20 @@ impl GAMClassifier {
         let (f1, recall, precision) = compute_f1_recall_precision(y_data, &proba);
         let brier = compute_brier_score(y_data, &proba);
 
-        let importance = self.compute_feature_importance(&design_matrix, &result.coefficients);
+        // Feature importance computation
+        let dm = DMatrix::from_row_slice(n, p, &design_data);
+        let importance = self.compute_feature_importance(&dm, &result.coefficients);
+
+        // Debug logging
+        let coef_norm = result.coefficients.norm();
+        let coef_min = result.coefficients.min();
+        let coef_max = result.coefficients.max();
+        let proba_min = proba.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let proba_max = proba.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        eprintln!("[GAM DEBUG] best_lambda={}, coef_norm={:.2}, coef_range=[{:.3}, {:.3}]", 
+                  best_lambda, coef_norm, coef_min, coef_max);
+        eprintln!("[GAM DEBUG] proba range=[{:.4}, {:.4}], converged={}, iterations={}",
+                  proba_min, proba_max, result.converged, result.n_iterations);
 
         GAMTrainingResult {
             roc_auc,
@@ -255,8 +276,6 @@ impl GAMClassifier {
                     } else {
                         format!("feature_{}", feat_idx)
                     };
-                    // For numeric/ordinal, all spline columns belong to one feature
-                    // Store name once (will be used for importance aggregation)
                     expanded_names.push(orig_name.clone());
 
                     // Copy basis vào matrix
@@ -359,20 +378,13 @@ impl GAMClassifier {
             let n_cols = col_end - col_start;
 
             // Map range index to feature name
-            // Nếu n_ranges == n_names: 1-to-1 mapping
-            // Nếu n_ranges > n_names: cần map ranges về original features
             let feat_name = if n_ranges == n_names {
-                // Simple case: mỗi range = 1 feature
                 self.feature_names[range_idx].clone()
             } else if range_idx < n_names {
-                // Fallback: dùng tên gốc nếu index hợp lệ
                 self.feature_names[range_idx].clone()
             } else {
-                // Nominal feature đã được expand: group về feature gốc
-                // Tìm feature gốc bằng cách scan backwards
                 let mut orig_idx = n_names - 1;
                 for oi in (0..n_names).rev() {
-                    // Heuristic: tìm feature gốc gần nhất
                     if oi <= range_idx {
                         orig_idx = oi;
                         break;
@@ -385,7 +397,9 @@ impl GAMClassifier {
             for i in 0..n {
                 let mut val = 0.0;
                 for j in 0..n_cols {
-                    val += design_matrix[(i, col_start + j)] * coefficients[col_start + j];
+                    if col_start + j < coefficients.len() {
+                        val += design_matrix[(i, col_start + j)] * coefficients[col_start + j];
+                    }
                 }
                 contribution[i] = val;
             }
@@ -398,7 +412,8 @@ impl GAMClassifier {
             });
         }
 
-        importance.sort_by(|a, b| b.variance_importance.partial_cmp(&a.variance_importance).unwrap());
+        importance.sort_by(|a, b| b.variance_importance.partial_cmp(&a.variance_importance)
+            .unwrap_or(std::cmp::Ordering::Equal));
         importance
     }
 }
@@ -417,12 +432,14 @@ fn compute_roc_auc(y_true: &[f64], y_score: &[f64]) -> f64 {
     
     let mut n_pos = 0f64;
     for &(_, l) in &pairs { if l >= 0.5 { n_pos += 1.0; } }
-    let n_neg = n as f64 - n_pos;
+    let n_neg = pairs.len() as f64 - n_pos;
     if n_pos == 0.0 || n_neg == 0.0 { return 0.5; }
     
+    // FIX: Correct trapezoidal rule for AUC
     let mut tp = 0f64;
     let mut fp = 0f64;
     let mut auc = 0.0;
+    let mut prev_tpr = 0f64;
     let mut prev_fpr = 0f64;
     
     for &(_score, label) in &pairs {
@@ -430,7 +447,9 @@ fn compute_roc_auc(y_true: &[f64], y_score: &[f64]) -> f64 {
         else { fp += 1.0; }
         let tpr = tp / n_pos;
         let fpr = fp / n_neg;
-        auc += (fpr - prev_fpr) * (tpr + tp / n_pos) / 2.0;
+        // Correct trapezoidal: average of prev_tpr and current tpr
+        auc += (fpr - prev_fpr) * (prev_tpr + tpr) / 2.0;
+        prev_tpr = tpr;
         prev_fpr = fpr;
     }
     

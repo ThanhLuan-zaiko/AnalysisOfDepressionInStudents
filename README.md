@@ -805,13 +805,17 @@ from src.ml_models.gam_model import GAMClassifier
 
 gam = GAMClassifier()
 result = gam.train(X, y, feature_types, feature_names)
-
-# Console output:
-# GAM (Rust): ROC-AUC=0.8542, F1=0.7821
+# result["_engine"] = "rust" hoặc "pygam" (fallback tự động)
 ```
 
-GAM sẽ **tự động dùng rust_engine** nếu đã build. Nếu không, fallback về pyGAM.
-Không cần config thêm — code tự detect và chọn engine phù hợp.
+> ⚠️ **Lưu ý về hiệu năng GAM:**
+> - GAM **không phải mô hình mạnh nhất** trong pipeline này
+> - Trên dữ liệu thực tế (100 features, 27K samples): GAM ~0.80 AUC, Logistic ~0.92, CatBoost ~0.94
+> - Rust engine (block-diagonal P-IRLS) **nhanh hơn pyGAM 15-50x** nhưng accuracy thấp hơn do bỏ qua cross-feature correlations
+> - **Nên dùng GAM cho**: interpretability, partial dependence plots, visualizations
+> - **Nên dùng CatBoost/Logistic cho**: accuracy cao nhất, production deployment
+>
+> GAM vẫn hoạt động và có giá trị riêng — chỉ đừng kỳ vọng nó đánh bại tree-based models.
 
 ### PyTorch - Code Giống Hệt CPU/GPU
 

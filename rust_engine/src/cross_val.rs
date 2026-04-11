@@ -9,7 +9,7 @@
 use rayon::prelude::*;
 use nalgebra::DMatrix;
 
-use crate::pirls::{pirls_logistic, logistic, gcv_score};
+use crate::pirls::{pirls_logistic_block, logistic, gcv_score, FeatureBlock};
 use crate::bspline::{create_basis_matrix, create_penalty_matrix, FeatureType};
 
 /// Kết quả của một fold
@@ -110,8 +110,10 @@ fn lcg_next(state: u64) -> u64 {
 /// Pre-built design matrix info — cached once, reused across folds
 #[derive(Clone)]
 pub struct CachedDesignMatrix {
-    /// Full design matrix (all samples, all features)
-    pub matrix: DMatrix<f64>,
+    /// Full design matrix stored as row-major flat Vec for efficient row extraction
+    pub matrix_data: Vec<f64>,
+    pub n_rows: usize,
+    pub n_cols: usize,
     /// Column ranges per feature: (start_col, end_col)
     pub col_ranges: Vec<(usize, usize)>,
     /// Penalty matrices per feature
@@ -121,7 +123,6 @@ pub struct CachedDesignMatrix {
 }
 
 /// Build design matrix once from raw data — single-pass optimized version
-/// Processes each feature completely in one outer loop, avoiding redundant data extraction.
 pub fn build_cached_design_matrix(
     x_data: &[f64],
     n_samples: usize,
@@ -137,7 +138,7 @@ pub fn build_cached_design_matrix(
         _ => FeatureType::Numeric,
     }).collect();
 
-    // First pass: count total columns — compute basis matrix to get exact column count
+    // First pass: count total columns
     let mut total_cols = 0;
     let mut col_counts: Vec<usize> = Vec::with_capacity(n_features);
     for feat_idx in 0..n_features {
@@ -164,8 +165,8 @@ pub fn build_cached_design_matrix(
         }
     }
 
-    // Second pass: build matrix — one feature at a time, fully processed
-    let mut matrix = DMatrix::zeros(n_samples, total_cols);
+    // Second pass: build matrix as row-major flat Vec
+    let mut matrix_data = vec![0.0f64; n_samples * total_cols];
     let mut col_ranges = Vec::with_capacity(n_features);
     let mut penalties_vec = Vec::with_capacity(n_features);
     let mut col_offset = 0;
@@ -189,7 +190,7 @@ pub fn build_cached_design_matrix(
 
                 for i in 0..n_samples {
                     for j in 0..n_basis {
-                        matrix[(i, col_offset + j)] = basis[(i, j)];
+                        matrix_data[i * total_cols + col_offset + j] = basis[(i, j)];
                     }
                 }
                 col_offset += n_basis;
@@ -201,7 +202,7 @@ pub fn build_cached_design_matrix(
 
                 for _level_idx in 0..sorted.len() {
                     for i in 0..n_samples {
-                        matrix[(i, col_offset)] = if (feature_vals[i] - sorted[_level_idx]).abs() < 1e-10 {
+                        matrix_data[i * total_cols + col_offset] = if (feature_vals[i] - sorted[_level_idx]).abs() < 1e-10 {
                             1.0
                         } else {
                             0.0
@@ -216,29 +217,25 @@ pub fn build_cached_design_matrix(
     }
 
     CachedDesignMatrix {
-        matrix,
+        matrix_data,
+        n_rows: n_samples,
+        n_cols: total_cols,
         col_ranges,
         penalties: penalties_vec,
         feature_types: types,
     }
 }
 
-/// Submatrix extractor — returns rows by index
-/// Uses contiguous buffer allocation for better cache performance.
-fn extract_rows(matrix: &DMatrix<f64>, indices: &[usize]) -> DMatrix<f64> {
+/// Extract rows as row-major flat Vec (correct layout for PIRLS solver)
+fn extract_rows_flat(cached: &CachedDesignMatrix, indices: &[usize]) -> Vec<f64> {
     let n = indices.len();
-    let p = matrix.ncols();
-    if n == 0 || p == 0 {
-        return DMatrix::zeros(0, 0);
+    let p = cached.n_cols;
+    let mut out = Vec::with_capacity(n * p);
+    for &i in indices {
+        let row_start = i * p;
+        out.extend_from_slice(&cached.matrix_data[row_start..row_start + p]);
     }
-    let mut out = vec![0.0f64; n * p];
-    for (row_pos, &i) in indices.iter().enumerate() {
-        let ro_out = row_pos * p;
-        for j in 0..p {
-            out[ro_out + j] = matrix[(i, j)];
-        }
-    }
-    DMatrix::from_vec(n, p, out)
+    out
 }
 
 /// Optimized: chạy stratified K-fold CV với cached design matrix
@@ -290,19 +287,20 @@ fn run_single_fold_cached(
         train_indices.sort_unstable();
     }
 
-    let val_indices = val_idx;
-
-    // Extract sub-matrices from cached design matrix (no rebuilding!)
-    let train_x = extract_rows(&cached.matrix, &train_indices);
+    // Extract sub-matrices as row-major flat Vec (no layout bug!)
+    let train_x = extract_rows_flat(cached, &train_indices);
     let train_y: Vec<f64> = train_indices.iter().map(|&i| y_data[i]).collect();
+    let n_train = train_indices.len();
+    let p = cached.n_cols;
 
     // Fit GAM using per-feature lambda optimization
-    let result = fit_gam_cached(&train_x, &train_y, cached);
+    let result = fit_gam_cached(&train_x, &train_y, n_train, p, cached);
 
     // Predict on validation set
-    let val_x = extract_rows(&cached.matrix, val_indices);
-    let val_y: Vec<f64> = val_indices.iter().map(|&i| y_data[i]).collect();
-    let val_proba = predict_gam_matrix(&val_x, &result.coefficients, &cached.col_ranges);
+    let val_x = extract_rows_flat(cached, val_idx);
+    let val_y: Vec<f64> = val_idx.iter().map(|&i| y_data[i]).collect();
+    let val_n = val_idx.len();
+    let val_proba = predict_gam_flat(&val_x, &result.coefficients, val_n, p);
 
     let roc_auc = compute_roc_auc(&val_y, &val_proba);
     let pr_auc = compute_pr_auc(&val_y, &val_proba);
@@ -329,33 +327,44 @@ struct GAMFitResult {
 }
 
 fn fit_gam_cached(
-    x: &DMatrix<f64>,
+    x_data: &[f64],  // row-major flat, n × p
     y: &[f64],
+    n: usize,
+    p: usize,
     cached: &CachedDesignMatrix,
 ) -> GAMFitResult {
-    let p = x.ncols();
-    let n_features = cached.col_ranges.len();
-    let y_vec = nalgebra::DVector::from_vec(y.to_vec());
+    // Lambda grid - same as gam.rs for consistency
+    let lambda_candidates = [1.0, 5.0, 10.0, 50.0, 100.0, 500.0];
 
-    // Use the full-matrix P-IRLS solver which is numerically stable
-    // Build combined penalty from all features
-    let mut penalty = DMatrix::zeros(p, p);
-    let lambda = 1.0; // Moderate regularization
-    for feat_idx in 0..n_features {
-        let (col_start, col_end) = cached.col_ranges[feat_idx];
-        let nc = col_end - col_start;
-        let block_penalty = &cached.penalties[feat_idx];
-        if !block_penalty.is_empty() && block_penalty.trace().abs() > 1e-12 {
-            for i in 0..nc {
-                for j in 0..nc {
-                    penalty[(col_start + i, col_start + j)] += block_penalty[(i, j)];
-                }
+    let build_blocks = |lambda: f64| -> Vec<FeatureBlock> {
+        cached.col_ranges.iter().enumerate().map(|(idx, &(cs, ce))| {
+            FeatureBlock {
+                col_start: cs,
+                n_cols: ce - cs,
+                penalty: cached.penalties[idx].clone(),
+                lambda,
             }
+        }).collect()
+    };
+
+    // Lambda grid search — pick best GCV (don't require convergence for speed)
+    let mut best_lambda = 10.0;
+    let mut best_gcv = f64::MAX;
+
+    for &lambda in &lambda_candidates {
+        let blocks = build_blocks(lambda);
+        let result = pirls_logistic_block(x_data, y, n, p, &blocks, 20, 1e-4);
+        let gcv = gcv_score(result.log_likelihood, result.edf, n);
+
+        if gcv < best_gcv {
+            best_gcv = gcv;
+            best_lambda = lambda;
         }
     }
 
-    // Run full P-IRLS with combined penalty
-    let result = pirls_logistic(x, &y_vec, &penalty, lambda, 200, 1e-7);
+    // Final fit with best lambda
+    let final_blocks = build_blocks(best_lambda);
+    let result = pirls_logistic_block(x_data, y, n, p, &final_blocks, 40, 1e-4);
 
     GAMFitResult {
         coefficients: result.coefficients.iter().copied().collect(),
@@ -364,21 +373,21 @@ fn fit_gam_cached(
     }
 }
 
-/// Predict using design matrix directly
-fn predict_gam_matrix(
-    x: &DMatrix<f64>,
+/// Predict using row-major flat data directly
+fn predict_gam_flat(
+    x_data: &[f64],  // row-major, n × p
     coefficients: &[f64],
-    _col_ranges: &[(usize, usize)],
+    n: usize,
+    p: usize,
 ) -> Vec<f64> {
-    let n = x.nrows();
-    let p = x.ncols();
     let effective_p = p.min(coefficients.len());
 
     let mut proba = Vec::with_capacity(n);
     for i in 0..n {
         let mut eta = 0.0;
+        let ro = i * p;
         for j in 0..effective_p {
-            eta += x[(i, j)] * coefficients[j];
+            eta += x_data[ro + j] * coefficients[j];
         }
         proba.push(logistic(eta));
     }
@@ -477,21 +486,50 @@ fn fit_gam_rust(
     let n = x.len() / n_features;
     let (design, col_ranges) = build_design_matrix(x, n, n_features, feature_types, n_splines, 3);
     let d_n = design.nrows();
+    let p = design.ncols();
 
-    let penalty = build_combined_penalty(&col_ranges, n_splines, 3, n_features);
-    let y_vec = nalgebra::DVector::from_vec(y.to_vec());
+    // Convert to row-major for block solver
+    let x_data: Vec<f64> = {
+        let mut data = Vec::with_capacity(d_n * p);
+        for i in 0..d_n {
+            for j in 0..p {
+                data.push(design[(i, j)]);
+            }
+        }
+        data
+    };
 
-    let lambda_values = [0.0001, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 50.0, 100.0];
-    let mut best_lambda = 1.0;
+    // Build Feature blocks - same lambda grid as main functions
+    let lambda_values = [1.0, 5.0, 10.0, 50.0, 100.0, 500.0];
+
+    let build_blocks = |lambda: f64| -> Vec<FeatureBlock> {
+        col_ranges.iter().enumerate().map(|(_idx, &(cs, ce))| {
+            let nc = ce - cs;
+            let penalty = nalgebra::DMatrix::from_diagonal_element(nc, nc, 1.0);
+            FeatureBlock {
+                col_start: cs,
+                n_cols: nc,
+                penalty,
+                lambda,
+            }
+        }).collect()
+    };
+
+    let mut best_lambda = 10.0;
     let mut best_gcv = f64::MAX;
 
     for &lambda in &lambda_values {
-        let result = pirls_logistic(&design, &y_vec, &penalty, lambda, 30, 1e-5);
+        let blocks = build_blocks(lambda);
+        let result = pirls_logistic_block(&x_data, y, d_n, p, &blocks, 20, 1e-4);
         let gcv = gcv_score(result.log_likelihood, result.edf, d_n);
-        if gcv < best_gcv { best_gcv = gcv; best_lambda = lambda; }
+        if gcv < best_gcv {
+            best_gcv = gcv;
+            best_lambda = lambda;
+        }
     }
 
-    let result = pirls_logistic(&design, &y_vec, &penalty, best_lambda, 50, 1e-6);
+    let final_blocks = build_blocks(best_lambda);
+    let result = pirls_logistic_block(&x_data, y, d_n, p, &final_blocks, 40, 1e-4);
     GAMFitResult {
         coefficients: result.coefficients.iter().copied().collect(),
         converged: result.converged, n_iterations: result.n_iterations,
@@ -569,24 +607,6 @@ fn build_design_matrix(
     (matrix, col_ranges)
 }
 
-fn build_combined_penalty(
-    col_ranges: &[(usize, usize)], _n_splines: usize, _degree: usize, _n_features: usize,
-) -> nalgebra::DMatrix<f64> {
-    let total = col_ranges.last().map(|(_, e)| *e).unwrap_or(0);
-    let mut penalty = nalgebra::DMatrix::zeros(total, total);
-    for (_, (s, e)) in col_ranges.iter().enumerate() {
-        let nc = e - s;
-        let mut p: nalgebra::DMatrix<f64> = nalgebra::DMatrix::zeros(nc, nc);
-        for i in 0..nc.saturating_sub(2) {
-            p[(i, i)] += 1.0; p[(i, i+1)] -= 2.0; p[(i, i+2)] += 1.0;
-            p[(i+1, i)] -= 2.0; p[(i+1, i+1)] += 4.0; p[(i+1, i+2)] -= 2.0;
-            p[(i+2, i)] += 1.0; p[(i+2, i+1)] -= 2.0; p[(i+2, i+2)] += 1.0;
-        }
-        for i in 0..nc { for j in 0..nc { penalty[(s + i, s + j)] += p[(i, j)]; } }
-    }
-    penalty
-}
-
 fn extract_features(x: &[f64], indices: &[usize], n_features: usize) -> Vec<f64> {
     let n = indices.len();
     let mut out = Vec::with_capacity(n * n_features);
@@ -639,11 +659,11 @@ fn compute_cv_summary(folds: &[FoldResult]) -> CVResult {
         mean_recall: m_rec, std_recall: std(&recalls, m_rec),
         mean_precision: m_prec, std_precision: std(&precisions, m_prec),
         mean_brier: m_brier, std_brier: std(&briers, m_brier),
-        converged_folds: folds.len(),
+        converged_folds: folds.iter().filter(|f| f.converged).count(),
     }
 }
 
-// ========== Metric functions ==========
+// ========== Metric functions (fixed) ==========
 
 fn compute_roc_auc(y_true: &[f64], y_score: &[f64]) -> f64 {
     let n = y_true.len();
@@ -652,14 +672,22 @@ fn compute_roc_auc(y_true: &[f64], y_score: &[f64]) -> f64 {
     pairs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     let mut n_pos = 0f64;
     for &(_, l) in &pairs { if l >= 0.5 { n_pos += 1.0; } }
-    let n_neg = n as f64 - n_pos;
+    let n_neg = pairs.len() as f64 - n_pos;
     if n_pos == 0.0 || n_neg == 0.0 { return 0.5; }
-    let (mut tp, mut fp, mut auc, mut prev_fpr) = (0f64, 0f64, 0.0, 0f64);
+
+    // FIX: Correct trapezoidal rule
+    let mut tp = 0f64;
+    let mut fp = 0f64;
+    let mut auc = 0.0;
+    let mut prev_tpr = 0f64;
+    let mut prev_fpr = 0f64;
+
     for &(_s, label) in &pairs {
         if label >= 0.5 { tp += 1.0; } else { fp += 1.0; }
         let tpr = tp / n_pos;
         let fpr = fp / n_neg;
-        auc += (fpr - prev_fpr) * (tpr + tp / n_pos) / 2.0;
+        auc += (fpr - prev_fpr) * (prev_tpr + tpr) / 2.0;
+        prev_tpr = tpr;
         prev_fpr = fpr;
     }
     auc

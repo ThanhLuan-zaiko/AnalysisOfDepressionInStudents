@@ -38,30 +38,27 @@ pub struct PirlsResult {
 /// Accumulator cho full X'WX (legacy)
 #[derive(Clone)]
 struct FullAccum {
-    upper: Vec<f64>,
-    xwz: Vec<f64>,
+    xwx: Vec<f64>,  // Full p x p matrix, row-major
+    xwz: Vec<f64>,  // Length p
     p: usize,
 }
 
 impl FullAccum {
     fn new(p: usize) -> Self {
         FullAccum {
-            upper: vec![0.0; p * (p + 1) / 2],
+            xwx: vec![0.0; p * p],
             xwz: vec![0.0; p],
             p,
         }
     }
     fn merge(mut self, o: &FullAccum) -> Self {
-        for i in 0..self.upper.len() { self.upper[i] += o.upper[i]; }
+        for i in 0..self.xwx.len() { self.xwx[i] += o.xwx[i]; }
         for i in 0..self.p { self.xwz[i] += o.xwz[i]; }
         self
     }
     fn to_xwx(&self) -> DMatrix<f64> {
         let p = self.p;
-        let mut m = DMatrix::zeros(p, p);
-        let mut idx = 0;
-        for j in 0..p { for k in j..p { m[(j,k)] = self.upper[idx]; m[(k,j)] = self.upper[idx]; idx += 1; } }
-        m
+        DMatrix::from_row_slice(p, p, &self.xwx)
     }
     fn to_xwz(&self) -> DVector<f64> { DVector::from_vec(self.xwz.clone()) }
 }
@@ -99,10 +96,8 @@ pub fn logistic(x: f64) -> f64 {
 
 /// Block-diagonal P-IRLS solver cho logistic GAM
 ///
-/// Tối ưu cho nhiều features:
-/// - Per-feature X'wX blocks tính độc lập, song song
-/// - Không tính cross-terms giữa các feature (block-diagonal)
-/// - Cholesky solve từng block nhỏ
+/// FIX: Tách biệt eta (linear predictor) và z (working response)
+/// FIX: Correct IRLS update: z = eta + (y - mu) / w, solve for beta, update eta = X*beta
 pub fn pirls_logistic_block(
     x_data: &[f64],    // row-major, n × p
     y_data: &[f64],
@@ -113,27 +108,33 @@ pub fn pirls_logistic_block(
     tol: f64,
 ) -> PirlsResult {
     let mut beta = DVector::from_element(p, 0.0);
-    let mut eta = vec![0.0; n];
-    let mut weights = vec![1.0; n];
     let mut converged = false;
     let mut n_iter = 0;
-    let mut edf_total = p as f64; // Default fallback
+    let mut edf_total = p as f64;
 
     let chunk = 4096;
+
+    // Initialize eta = X * beta = 0
+    let mut eta = vec![0.0f64; n];
 
     for iter in 0..max_iter {
         n_iter = iter + 1;
 
-        // Compute mu, weights, working response z
+        // Step 1: Compute mu, weights, and working response z (SEPARATE from eta!)
+        let mut weights = vec![0.0f64; n];
+        let mut z_working = vec![0.0f64; n];
+
         for i in 0..n {
             let mu = logistic(eta[i]).clamp(1e-10, 1.0 - 1e-10);
-            let w = mu * (1.0 - mu);
+            let w = (mu * (1.0 - mu)).max(1e-10);
             weights[i] = w;
-            eta[i] += (y_data[i] - mu) / w;
+            // Working response: z = eta + (y - mu) / w
+            // CLAMP to prevent explosion when w is tiny
+            let z_raw = eta[i] + (y_data[i] - mu) / w;
+            z_working[i] = z_raw.clamp(-50.0, 50.0);
         }
 
-        // Compute per-block X'wX and X'wz in parallel
-        // Each block processes all rows — pre-allocate xvals buffer to avoid heap alloc per row
+        // Step 2: Compute per-block X'wX and X'wz in parallel
         let block_results: Vec<_> = blocks.par_iter().enumerate().map(|(block_idx, block)| {
             let cs = block.col_start;
             let nc = block.n_cols;
@@ -141,26 +142,21 @@ pub fn pirls_logistic_block(
                 return (block_idx, DMatrix::zeros(1, 1), DVector::zeros(1));
             }
 
-            // Accumulate X'wX for this block over all rows
             let mut block_xwx = DMatrix::zeros(nc, nc);
             let mut xwz = DVector::zeros(nc);
-
-            // Pre-allocate xvals buffer reused across all row chunks
             let mut xvals = vec![0.0f64; nc];
 
             for cstart in (0..n).step_by(chunk) {
                 let cend = (cstart + chunk).min(n);
                 for i in cstart..cend {
                     let wi = weights[i];
-                    let zi = eta[i];
+                    let zi = z_working[i];  // FIX: use z_working, not eta
                     let ro = i * p;
 
-                    // Extract feature values into pre-allocated buffer
                     for j in 0..nc {
                         xvals[j] = x_data[ro + cs + j];
                     }
 
-                    // Compute w_i * x_ij and accumulate directly into full matrix
                     for j in 0..nc {
                         let wixj = wi * xvals[j];
                         xwz[j] += wixj * zi;
@@ -178,7 +174,7 @@ pub fn pirls_logistic_block(
             (block_idx, block_xwx, xwz)
         }).collect();
 
-        // Solve each block independently — O(Σ n_i³) instead of O(p³)
+        // Step 3: Solve each block independently
         let mut new_beta = DVector::zeros(p);
         edf_total = 0.0;
 
@@ -192,24 +188,18 @@ pub fn pirls_logistic_block(
             let scaled_penalty = block.penalty.scale(block.lambda);
             let a = block_xwx + &scaled_penalty;
 
-            // Solve block — with robust numerical fallback
+            // Solve block — multi-tier fallback for numerical stability
             let block_beta = match Cholesky::new(a.clone()) {
                 Some(chol) => chol.solve(xwz),
                 None => {
-                    // Try with stronger ridge regularization
-                    let ridge = DMatrix::from_diagonal_element(nc, nc, 1e-4);
+                    let ridge = DMatrix::from_diagonal_element(nc, nc, 1.0);
                     match Cholesky::new(a.clone() + &ridge) {
                         Some(chol) => chol.solve(xwz),
                         None => {
-                            // Last resort: even stronger ridge
-                            let ridge2 = DMatrix::from_diagonal_element(nc, nc, 1e-2);
+                            let ridge2 = DMatrix::from_diagonal_element(nc, nc, 10.0);
                             match Cholesky::new(a.clone() + &ridge2) {
                                 Some(chol) => chol.solve(xwz),
                                 None => {
-                                    // If all else fails, fall back to previous beta for this block
-                                    for j in 0..nc {
-                                        new_beta[cs + j] = beta[cs + j];
-                                    }
                                     continue;
                                 }
                             }
@@ -218,9 +208,10 @@ pub fn pirls_logistic_block(
                 }
             };
 
-            // Copy solution to full beta vector
+            // Copy solution — clamp to prevent numerical explosion
             for j in 0..nc {
-                new_beta[cs + j] = block_beta[j];
+                let val = block_beta[j];
+                new_beta[cs + j] = if val.is_finite() { val.clamp(-10.0, 10.0) } else { beta[cs + j] };
             }
 
             // Compute EDF for this block: trace((X'WX + λP)^{-1} X'WX)
@@ -234,13 +225,13 @@ pub fn pirls_logistic_block(
             edf_total += edf_block;
         }
 
-        // Compute new eta = X * beta (parallel by row chunks)
+        // Step 4: Compute new eta = X * new_beta
         let block_starts: Vec<usize> = blocks.iter().map(|b| b.col_start).collect();
         let block_ncols: Vec<usize> = blocks.iter().map(|b| b.n_cols).collect();
 
         let row_chunk = chunk.min(n).max(1);
         let n_chunks = (n + row_chunk - 1) / row_chunk;
-        let new_eta_vec: Vec<f64> = (0..n_chunks).into_par_iter().flat_map(|chunk_idx| {
+        let new_eta: Vec<f64> = (0..n_chunks).into_par_iter().flat_map(|chunk_idx| {
             let start = chunk_idx * row_chunk;
             let end = (start + row_chunk).min(n);
             (start..end).map(|i| {
@@ -256,22 +247,36 @@ pub fn pirls_logistic_block(
                 sum
             }).collect::<Vec<_>>()
         }).collect();
-        eta = new_eta_vec;
 
-        // Check convergence
+        // Step 5: Check convergence
         let diff = &new_beta - &beta;
         let rel = if beta.norm() > 1e-10 { diff.norm() / beta.norm() } else { diff.norm() };
+
         beta = new_beta;
-        if rel < tol { converged = true; break; }
+        // CLAMP eta to prevent explosion in next iteration
+        eta = new_eta.into_iter().map(|e| e.clamp(-50.0, 50.0)).collect();
+
+        if rel < tol {
+            converged = true;
+            break;
+        }
     }
 
-    let proba: DVector<f64> = DVector::from_vec(eta.iter().map(|&e| logistic(e)).collect());
+    // Final clamp
+    let beta = beta.map(|v| if v.is_finite() { v.clamp(-10.0, 10.0) } else { 0.0 });
+    // Clamp eta before computing probabilities
+    let eta_clamped: Vec<f64> = eta.into_iter().map(|e| e.clamp(-50.0, 50.0)).collect();
+
+    // Final probabilities from clamped eta
+    let proba: DVector<f64> = DVector::from_vec(
+        eta_clamped.iter().map(|&e| logistic(e)).collect()
+    );
     let ll = compute_ll(y_data, &proba);
 
     PirlsResult {
         coefficients: beta,
-        weights: DVector::from_vec(weights),
-        fitted: DVector::from_vec(eta),
+        weights: DVector::from_vec(vec![0.0; n]), // weights not needed after fitting
+        fitted: DVector::from_vec(eta_clamped),
         probabilities: proba,
         n_iterations: n_iter,
         converged,
@@ -295,23 +300,28 @@ pub fn pirls_logistic(
 ) -> PirlsResult {
     let n = x.nrows();
     let p = x.ncols();
-    let x_data = x.as_slice();
+    
+    // Convert DMatrix to row-major for correct indexing
+    let x_data: Vec<f64> = (0..n).flat_map(|i| (0..p).map(move |j| x[(i, j)])).collect();
+    
     let y_data = y.as_slice();
 
     let mut beta = DVector::from_element(p, 0.0);
-    let mut eta = DVector::from_element(n, 0.0);
-    let mut weights = DVector::from_element(n, 1.0);
+    let mut eta = vec![0.0f64; n];
     let mut converged = false;
     let mut n_iter = 0;
 
     for iter in 0..max_iter {
         n_iter = iter + 1;
 
-        // Compute mu, weights, z
+        // Compute mu, weights, z (SEPARATE z from eta)
+        let mut weights = vec![0.0f64; n];
+        let mut z_working = vec![0.0f64; n];
         for i in 0..n {
             let mu = logistic(eta[i]).clamp(1e-10, 1.0 - 1e-10);
-            weights[i] = mu * (1.0 - mu);
-            eta[i] += (y_data[i] - mu) / weights[i];
+            let w = mu * (1.0 - mu);
+            weights[i] = w.max(1e-10);
+            z_working[i] = eta[i] + (y_data[i] - mu) / weights[i];
         }
 
         // Parallel X'WX: divide rows among threads
@@ -324,13 +334,13 @@ pub fn pirls_logistic(
                 let mut acc = FullAccum::new(p);
                 for &i in chunk_indices {
                     let wi = weights[i];
-                    let zi = eta[i];
+                    let zi = z_working[i];
                     let ro = i * p;
                     for j in 0..p {
                         let xij = x_data[ro + j];
                         let wixij = wi * xij;
-                        for k in j..p {
-                            acc.upper[(j*(2*p-j-1))/2 + (k-j)] += wixij * x_data[ro + k];
+                        for k in 0..p {
+                            acc.xwx[j * p + k] += wixij * x_data[ro + k];
                         }
                         acc.xwz[j] += wixij * zi;
                     }
@@ -358,28 +368,46 @@ pub fn pirls_logistic(
             }
         };
 
-        // Compute eta = X * beta
+        // Coefficient clipping
+        let clip_val = 20.0;
+        let mut clipped_beta = DVector::zeros(p);
+        for j in 0..p {
+            clipped_beta[j] = new_beta[j].clamp(-clip_val, clip_val);
+        }
+
+        // Compute eta = X * clipped_beta
         for i in 0..n {
             let mut sum = 0.0;
             let ro = i * p;
-            for j in 0..p { sum += x_data[ro + j] * new_beta[j]; }
+            for j in 0..p { sum += x_data[ro + j] * clipped_beta[j]; }
             eta[i] = sum;
         }
 
-        let diff = &new_beta - &beta;
+        let diff = &clipped_beta - &beta;
         let rel = if beta.norm() > 1e-10 { diff.norm() / beta.norm() } else { diff.norm() };
-        beta = new_beta;
+        beta = clipped_beta;
         if rel < tol { converged = true; break; }
     }
 
-    let proba: DVector<f64> = eta.map(|e| logistic(e));
+    let proba: DVector<f64> = DVector::from_vec(eta.iter().map(|&e| logistic(e)).collect());
     let ll = compute_ll(y_data, &proba);
-    let edf = compute_edf_full(x_data, y_data, n, p, weights.as_slice(), penalty, lambda);
+    let edf = compute_edf_full(&x_data, y_data, n, p, &weights_from_eta(&eta), penalty, lambda);
 
     PirlsResult {
-        coefficients: beta, weights, fitted: eta, probabilities: proba,
+        coefficients: beta,
+        weights: DVector::from_element(n, 0.25),
+        fitted: DVector::from_vec(eta),
+        probabilities: proba,
         n_iterations: n_iter, converged, log_likelihood: ll, edf,
     }
+}
+
+/// Helper: compute weights from eta for EDF calculation
+fn weights_from_eta(eta: &[f64]) -> Vec<f64> {
+    eta.iter().map(|&e| {
+        let mu = logistic(e).clamp(1e-10, 1.0 - 1e-10);
+        (mu * (1.0 - mu)).max(1e-10)
+    }).collect()
 }
 
 fn compute_ll(y: &[f64], prob: &DVector<f64>) -> f64 {
@@ -408,7 +436,7 @@ fn compute_edf_full(
                 for j in 0..p {
                     let xij = x_data[ro + j];
                     let w = wi * xij;
-                    for k in j..p { acc.upper[(j*(2*p-j-1))/2+(k-j)] += w * x_data[ro+k]; }
+                    for k in 0..p { acc.xwx[j * p + k] += w * x_data[ro + k]; }
                 }
             }
             acc
@@ -434,20 +462,23 @@ fn quick_fit(
     let m = indices.len();
     let mut beta = DVector::from_element(p, 0.0);
     let mut eta = vec![0.0; m];
-    let mut weights = vec![1.0; m];
 
     for _iter in 0..max_iter {
+        // Compute weights and z (separate from eta)
+        let mut weights = vec![0.0f64; m];
+        let mut z_working = vec![0.0f64; m];
         for (idx_pos, &i) in indices.iter().enumerate() {
             let mu = logistic(eta[idx_pos]).clamp(1e-10, 1.0 - 1e-10);
-            weights[idx_pos] = mu * (1.0 - mu);
-            eta[idx_pos] += (y_data[i] - mu) / weights[idx_pos];
+            let w = (mu * (1.0 - mu)).max(1e-10);
+            weights[idx_pos] = w;
+            z_working[idx_pos] = eta[idx_pos] + (y_data[i] - mu) / w;
         }
 
         let mut xwx = DMatrix::zeros(p, p);
         let mut xwz = DVector::zeros(p);
         for (idx_pos, &i) in indices.iter().enumerate() {
             let wi = weights[idx_pos];
-            let zi = eta[idx_pos];
+            let zi = z_working[idx_pos];
             let ro = i * p;
             for j in 0..p {
                 let xij = x_data[ro + j];
@@ -464,16 +495,22 @@ fn quick_fit(
             None => beta.clone(),
         };
 
+        let clip_val = 20.0;
+        let mut clipped_beta = DVector::zeros(p);
+        for j in 0..p {
+            clipped_beta[j] = new_beta[j].clamp(-clip_val, clip_val);
+        }
+
         for (idx_pos, &i) in indices.iter().enumerate() {
             let mut sum = 0.0;
             let ro = i * p;
-            for j in 0..p { sum += x_data[ro + j] * new_beta[j]; }
+            for j in 0..p { sum += x_data[ro + j] * clipped_beta[j]; }
             eta[idx_pos] = sum;
         }
 
-        let diff = &new_beta - &beta;
+        let diff = &clipped_beta - &beta;
         let rel = if beta.norm() > 1e-10 { diff.norm() / beta.norm() } else { diff.norm() };
-        beta = new_beta;
+        beta = clipped_beta;
         if rel < tol { break; }
     }
 
@@ -505,7 +542,8 @@ pub fn find_best_lambda(
 ) -> (f64, f64) {
     let n = x.nrows();
     let p = x.ncols();
-    let x_data = x.as_slice();
+    // Convert to row-major
+    let x_data: Vec<f64> = (0..n).flat_map(|i| (0..p).map(move |j| x[(i, j)])).collect();
     let y_data = y.as_slice();
 
     let sub_n = (50000.min(n)).max(5000);
@@ -516,7 +554,7 @@ pub fn find_best_lambda(
     let mut worse_count = 0;
 
     for &lambda in lambda_values {
-        let (ll, edf) = quick_fit(x_data, y_data, n, p, penalty, lambda, &indices, max_iter, tol);
+        let (ll, edf) = quick_fit(&x_data, y_data, n, p, penalty, lambda, &indices, max_iter, tol);
         let gcv = gcv_score(ll, edf, n);
 
         if gcv < best_gcv {
@@ -538,12 +576,16 @@ mod tests {
 
     #[test]
     fn test_pirls_converges() {
-        let x = DMatrix::from_vec(20, 2, vec![
-            1.0,0.0,1.0,0.1,1.0,0.2,1.0,0.3,1.0,0.4,
-            1.0,0.5,1.0,0.6,1.0,0.7,1.0,0.8,1.0,0.9,
-            1.0,1.5,1.0,1.6,1.0,1.7,1.0,1.8,1.0,1.9,
-            1.0,2.0,1.0,2.1,1.0,2.2,1.0,2.3,1.0,2.4,
-        ]);
+        // Build matrix properly: 20 rows, 2 cols (intercept + feature)
+        let mut x = DMatrix::zeros(20, 2);
+        let feature_vals: Vec<f64> = vec![
+            0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,
+            1.5,1.6,1.7,1.8,1.9,2.0,2.1,2.2,2.3,2.4,
+        ];
+        for i in 0..20 {
+            x[(i, 0)] = 1.0; // intercept
+            x[(i, 1)] = feature_vals[i];
+        }
         let y = DVector::from_vec(vec![
             0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,
             1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,
@@ -558,5 +600,42 @@ mod tests {
         assert!(result.converged || result.n_iterations == 100);
         for i in 0..10 { assert!(result.probabilities[i] < 0.5, "prob[{}] = {} should be < 0.5", i, result.probabilities[i]); }
         for i in 10..20 { assert!(result.probabilities[i] > 0.5, "prob[{}] = {} should be > 0.5", i, result.probabilities[i]); }
+    }
+
+    #[test]
+    fn test_block_pirls_converges() {
+        // Test block solver with simple data — single block (realistic for GAM)
+        // In real GAM, each feature's spline bases are in ONE block
+        let n = 40;
+        let p = 2;
+        let mut x_data = vec![0.0f64; n * p];
+        let mut y_data = vec![0.0f64; n];
+
+        for i in 0..n {
+            x_data[i * p] = 1.0; // intercept
+            x_data[i * p + 1] = i as f64 / n as f64 * 3.0; // feature
+            y_data[i] = if i >= n / 2 { 1.0 } else { 0.0 };
+        }
+
+        // Single block containing both columns (like a real spline block)
+        let blocks = vec![
+            FeatureBlock {
+                col_start: 0,
+                n_cols: 2,
+                penalty: DMatrix::zeros(2, 2),
+                lambda: 0.0,
+            },
+        ];
+
+        let result = pirls_logistic_block(&x_data, &y_data, n, p, &blocks, 100, 1e-6);
+        println!("Block PIRLS: converged={}, n_iter={}", result.converged, result.n_iterations);
+        println!("coefficients: {:?}", result.coefficients);
+
+        // Check that predictions make sense
+        let neg_proba: f64 = (0..n/2).map(|i| result.probabilities[i]).sum::<f64>() / (n/2) as f64;
+        let pos_proba: f64 = (n/2..n).map(|i| result.probabilities[i]).sum::<f64>() / (n/2) as f64;
+        println!("avg neg proba={:.4}, avg pos proba={:.4}", neg_proba, pos_proba);
+        assert!(neg_proba < 0.5, "neg avg proba {} should be < 0.5", neg_proba);
+        assert!(pos_proba > 0.5, "pos avg proba {} should be > 0.5", pos_proba);
     }
 }
