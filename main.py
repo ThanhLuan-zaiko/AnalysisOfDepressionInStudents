@@ -334,6 +334,7 @@ def main(
     run_fairness: bool = False,
     run_subgroups: bool = False,
     run_robustness: bool = False,
+    run_report: bool = False,
 ):
     """
     Main analysis pipeline — chạy theo giai đoạn tùy chọn.
@@ -422,6 +423,11 @@ def main(
                 run_robustness=run_robustness,
                 conservative=conservative,
             )
+
+    # ---- Giai đoạn Report ----
+    if run_report:
+        with Timer("Report Generation"):
+            run_report_generation()
 
     # ---- Summary ----
     print()
@@ -727,6 +733,43 @@ def run_leakage_investigation(df: pl.DataFrame):
         json.dump(serializable, f, indent=2, ensure_ascii=False, default=str)
 
     print(f"\n  ✅ Báo cáo đã lưu: {report_path}")
+
+
+def run_report_generation():
+    """Tạo báo cáo tổng hợp từ tất cả kết quả analysis."""
+    from src.evaluation import ReportGenerator
+
+    print("\n" + "=" * 80)
+    print(" 📝 TẠO BÁO CÁO TỔNG HỢP")
+    print("=" * 80)
+
+    generator = ReportGenerator(results_dir="results/")
+
+    # Load all results
+    print("\n  📂 Đang tải kết quả...")
+    generator.load_all_results()
+
+    # Generate Markdown
+    print("\n  📄 Tạo Markdown report...")
+    md_path = generator.generate_markdown_report(output_path="results/final_report.md")
+    print(f"     ✅ Saved: {md_path}")
+
+    # Generate HTML
+    print("\n  🌐 Tạo HTML report...")
+    html_path = generator.generate_html_report(
+        md_path=md_path,
+        output_path="results/final_report.html",
+    )
+    print(f"     ✅ Saved: {html_path}")
+
+    print("\n  📋 Báo cáo bao gồm:")
+    print("     • Executive summary — key findings")
+    print("     • Model performance — so sánh 4 mô hình")
+    print("     • Fairness analysis — bias detection")
+    print("     • Subgroup analysis — performance breakdown")
+    print("     • Robustness analysis — stability tests")
+    print("     • Recommendations — actionable insights")
+    print(f"\n  📁 File: results/final_report.md, results/final_report.html")
 
 
 def run_advanced_analysis(
@@ -1149,6 +1192,8 @@ if __name__ == "__main__":
                         help="🛡️  Robustness Analysis: Bootstrap CI, noise injection, feature ablation")
     parser.add_argument("--analysis", action="store_true",
                         help="📊 Chạy cả 3: Fairness + Subgroup + Robustness (sau khi đã train models)")
+    parser.add_argument("--report", action="store_true",
+                        help="📝 Auto-generate comprehensive report (Markdown + HTML) từ tất cả kết quả")
     parser.add_argument("--dataset", type=str, default=DEFAULT_DATASET,
                         help="Đường dẫn đến tệp dataset (mặc định: Student_Depression_Dataset.csv)")
 
@@ -1157,7 +1202,7 @@ if __name__ == "__main__":
     # Default: nếu không có flag nào → chạy EDA
     any_flag = (args.eda or args.stats or args.models or args.leakage or args.full
                 or args.review or args.standardize or args.famd or args.split
-                or args.fairness or args.subgroups or args.robustness or args.analysis)
+                or args.fairness or args.subgroups or args.robustness or args.analysis or args.report)
 
     try:
         if args.full:
@@ -1192,6 +1237,7 @@ if __name__ == "__main__":
                 run_fairness=args.fairness or args.analysis,
                 run_subgroups=args.subgroups or args.analysis,
                 run_robustness=args.robustness or args.analysis,
+                run_report=args.report,
             )
         else:
             # Default: chỉ chạy EDA + ethical
