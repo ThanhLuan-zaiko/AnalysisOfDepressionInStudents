@@ -665,36 +665,150 @@ uv run python main.py --models --no-ethical
 
 ---
 
+#### 12. `--fairness`
+
+```bash
+uv run python main.py --fairness --conservative
+```
+
+**Chạy:** ⚖️ Fairness Analysis — đánh giá tính công bằng của mô hình theo các nhóm nhân khẩu học.
+
+| Phân tích | Nội dung | Output |
+|-----------|----------|--------|
+| **Demographic Parity** | Tỷ lệ dự đoán dương tính có giống nhau giữa các nhóm? | JSON + HTML dashboard |
+| **Equalized Odds** | TPR (Recall) và FPR có tương đương giữa các nhóm? | JSON + HTML dashboard |
+| **Predictive Parity** | Precision có tương đương giữa các nhóm? | JSON + HTML dashboard |
+| **Disparate Impact** | Tỷ lệ chấp nhận (4/5 rule) — nhóm thiểu số có bị thiệt thòi? | JSON + HTML dashboard |
+| **Theil Index** | Độ bất bình đẳng trong confidence của dự đoán | JSON + HTML dashboard |
+
+**Nhóm được phân tích:** Gender, Age, Family History of Mental Illness
+
+**Dùng khi:** Muốn đảm bảo mô hình không phân biệt đối xử — đặc biệt quan trọng cho ứng dụng y tế/học đường.
+
+**File sinh ra:**
+- `results/fairness_logistic.json`, `results/fairness_catboost.json` — metrics chi tiết
+- `results/fairness_dashboard_logistic.html`, `results/fairness_dashboard_catboost.html` — interactive dashboard
+
+**️ Thời gian:** ~1-2 giây (sau khi models đã train).
+
+---
+
+#### 13. `--subgroups`
+
+```bash
+uv run python main.py --subgroups --conservative
+```
+
+**Chạy:** 🔍 Subgroup Analysis — phân tích hiệu suất mô hình chi tiết theo từng nhóm con.
+
+| Phân tích | Nội dung | Output |
+|-----------|----------|--------|
+| **Performance breakdown** | AUC, F1, Precision, Recall, FPR, FNR theo từng subgroup | JSON + HTML dashboard |
+| **Error analysis** | False negatives/positives — nhóm nào bị bỏ sót nhiều nhất? Confidence của lỗi? | JSON + HTML dashboard |
+| **Calibration by subgroup** | ECE (Expected Calibration Error) — mô hình có calibrated tốt cho mọi nhóm? | JSON + HTML dashboard |
+| **Threshold recommendations** | Ngưỡng tối ưu (F1-optimal, Cost-optimal) cho từng nhóm | JSON + HTML dashboard |
+
+**Nhóm được phân tích:** Gender, Age groups, Family History, Top 10 Cities, Academic Pressure levels
+
+**Dùng khi:** Muốn hiểu mô hình hoạt động thế nào với từng nhóm cụ thể — tìm nhóm yếu để cải thiện.
+
+**File sinh ra:**
+- `results/subgroup_logistic.json`, `results/subgroup_catboost.json` — metrics chi tiết
+- `results/subgroup_dashboard_logistic.html`, `results/subgroup_dashboard_catboost.html` — interactive dashboard
+
+**⏱️ Thời gian:** ~3-5 giây (sau khi models đã train).
+
+---
+
+#### 14. `--robustness`
+
+```bash
+uv run python main.py --robustness --conservative
+```
+
+**Chạy:** 🛡️ Robustness Analysis — kiểm tra độ bền của mô hình trước nhiễu và biến đổi dữ liệu.
+
+| Phân tích | Nội dung | Output |
+|-----------|----------|--------|
+| **Bootstrap CI** | Confidence intervals qua 500 bootstrap samples — độ ổn định của metrics? | JSON + HTML dashboard |
+| **CV Stability** | Performance qua 5-fold cross-validation — mô hình có ổn định? | JSON + HTML dashboard |
+| **Noise Injection** | Thêm nhiễu Gaussian vào features — AUC giảm bao nhiêu? | JSON + HTML dashboard |
+| **Feature Ablation** | Bỏ từng nhóm features (City, Academic, Sleep...) — impact lên AUC? | JSON + HTML dashboard |
+| **Adversarial Label Flip** | Đảo ngẫu nhiên labels — mô hình sụp ở mức nhiễu nào? | JSON + HTML dashboard |
+
+**Dùng khi:** Muốn đảm bảo mô hình đáng tin cậy — không quá nhạy cảm với nhiễu hoặc thay đổi nhỏ.
+
+**File sinh ra:**
+- `results/robustness_logistic.json`, `results/robustness_catboost.json` — metrics chi tiết
+- `results/robustness_dashboard_logistic.html`, `results/robustness_dashboard_catboost.html` — interactive dashboard
+
+**⏱️ Thời gian:** ~2-5 phút (Logistic) / ~5-10 phút (CatBoost) — do cần retrain nhiều lần.
+
+---
+
+#### 15. `--analysis`
+
+```bash
+uv run python main.py --analysis --conservative
+```
+
+**Chạy:** 📊 **Tất cả 3 phân tích nâng cao** — Fairness + Subgroup + Robustness.
+
+| Giai đoạn | Nội dung | Output |
+|-----------|----------|--------|
+| **Models** | Huấn luyện 4 mô hình (Dummy → Logistic → GAM → CatBoost) | `results/model_results_*.json` |
+| **Fairness** | Demographic Parity, Equalized Odds, Disparate Impact, Theil Index | 2 JSON + 2 HTML |
+| **Subgroup** | Performance breakdown, Error analysis, Calibration, Threshold recs | 2 JSON + 2 HTML |
+| **Robustness** | Bootstrap CI, CV Stability, Noise Injection, Feature Ablation, Label Flip | 2 JSON + 2 HTML |
+
+**Không chạy:** EDA, stats, leakage, review, standardize, famd, split
+
+**Dùng khi:** Muốn đánh giá toàn diện mô hình — từ fairness đến robustness — trước khi deploy hoặc báo cáo.
+
+**File sinh ra:** **12 file** (6 JSON + 6 HTML dashboards) + output console chi tiết.
+
+**⏱️ Thời gian:** ~8-15 phút (tùy model — CatBoost robustness lâu nhất).
+
+---
+
 ### Bảng tổng hợp
 
-| Flag | EDA | Stats | Models (4) | GAM Viz | Model Comp | Fairness | Threshold | Leakage | Review | Standardize | FAMD | Split | Thời gian ~ |
-|------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| *(không flag)* | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
-| `--eda` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
-| `--review` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ | 2-3s |
-| `--standardize` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | 2-3s |
-| `--stats` | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 5-10s |
-| `--famd` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | 10s |
-| `--split` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | 3s |
-| `--models` | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | 10-20s* |
-| `--leakage` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | 5-10s |
-| `--full` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ | 20-30s* |
-| `--no-ethical` | — | — | — | — | — | — | — | — | — | — | — | — | Bỏ cảnh báo |
+| Flag | EDA | Stats | Models (4) | GAM Viz | Model Comp | Fairness | Threshold | Leakage | Review | Standardize | FAMD | Split | Fair | Subgroup | Robust | Thời gian ~ |
+|------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| *(không flag)* | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
+| `--eda` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
+| `--review` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
+| `--standardize` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | 2-3s |
+| `--stats` | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 5-10s |
+| `--famd` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | 10s |
+| `--split` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | 3s |
+| `--models` | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 10-20s* |
+| `--leakage` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 5-10s |
+| `--full` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | 20-30s* |
+| `--fairness` | ❌ | ❌ | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | 1-2s** |
+| `--subgroups` | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | 3-5s** |
+| `--robustness` | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | 5-15m** |
+| `--analysis` | ❌ | ❌ | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | 8-15m** |
+| `--no-ethical` | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | Bỏ cảnh báo |
 
 > **\*** Thời gian với Rust engine. Không có Rust (pyGAM fallback): gấp 2-4x chậm hơn.
+> **\*\*** Thời gian sau khi models đã train (train models ~2-5 phút).
 
 ### Flag bổ trợ
 
 | Flag | Tác dụng | Dùng với |
 |------|----------|----------|
-| `--conservative` | Dùng **Phiên bản A** — không có biến `Suicidal thoughts` (an toàn, không rủi ro rò rỉ nhãn) | `--models`, `--full` |
+| `--conservative` | Dùng **Phiên bản A** — không có biến `Suicidal thoughts` (an toàn, không rủi ro rò rỉ nhãn) | `--models`, `--full`, `--fairness`, `--subgroups`, `--robustness`, `--analysis` |
 | `--no-ethical` | Bỏ qua cảnh báo đạo đức ở Giai đoạn 0 | Mọi flag |
 | `--standardize` | Chuẩn hóa tên cột + giá trị + phân loại biến | Đứng riêng hoặc kèm `--review`, `--full` |
 
 **Ví dụ:**
 ```bash
-uv run python main.py --models --conservative    # Huấn luyện Phiên bản A
-uv run python main.py --full --conservative      # Toàn bộ pipeline, Phiên bản A
+uv run python main.py --models --conservative        # Huấn luyện Phiên bản A
+uv run python main.py --full --conservative          # Toàn bộ pipeline, Phiên bản A
+uv run python main.py --analysis --conservative      # Fairness + Subgroup + Robustness, Phiên bản A
+uv run python main.py --fairness --conservative      # Chỉ Fairness, Phiên bản A
+uv run python main.py --robustness --no-ethical      # Robustness, bỏ cảnh báo
 ```
 
 ### 📁 Tổng hợp Output theo Flag
@@ -710,6 +824,10 @@ uv run python main.py --full --conservative      # Toàn bộ pipeline, Phiên b
 | `--leakage` | 1 JSON (`leakage_investigation.json`) | Odds Ratio, Stress Test, Cross-Tab, Synthetic Check |
 | `--models` | 1 JSON + **10+ HTML** + 2 JSON | 4 mô hình, Fairness, Threshold, **GAM plots**, **Model comparison charts** |
 | `--full` | **16+ HTML** + 5-6 JSON | **Tất cả** các output trên |
+| `--fairness` | 2 JSON + 2 HTML | Fairness metrics (Demographic Parity, Equalized Odds, Disparate Impact, Theil Index) |
+| `--subgroups` | 2 JSON + 2 HTML | Subgroup performance, error analysis, calibration, threshold recommendations |
+| `--robustness` | 2 JSON + 2 HTML | Bootstrap CI, CV stability, noise injection, feature ablation, adversarial label flip |
+| `--analysis` | **6 JSON + 6 HTML** | **Tất cả 3 phân tích nâng cao** — Fairness + Subgroup + Robustness |
 
 **Chi tiết file từ `--models` và `--full`:**
 - `results/model_results_*.json` — metrics của 4 mô hình
@@ -721,6 +839,14 @@ uv run python main.py --full --conservative      # Toàn bộ pipeline, Phiên b
 - `results/calibration_curves.html` — calibration curves
 - `results/decision_curves.html` — decision curve analysis
 - `results/model_comparison_report.json` — McNemar's test, DeLong's test, rankings
+
+**Chi tiết file từ `--analysis`, `--fairness`, `--subgroups`, `--robustness`:**
+- `results/fairness_logistic.json`, `results/fairness_catboost.json` — fairness metrics chi tiết
+- `results/fairness_dashboard_*.html` — interactive fairness dashboard (6 biểu đồ + table)
+- `results/subgroup_logistic.json`, `results/subgroup_catboost.json` — subgroup performance chi tiết
+- `results/subgroup_dashboard_*.html` — interactive subgroup dashboard (6 biểu đồ + table)
+- `results/robustness_logistic.json`, `results/robustness_catboost.json` — robustness metrics chi tiết
+- `results/robustness_dashboard_*.html` — interactive robustness dashboard (6 biểu đồ + summary table)
 
 ### File khác
 

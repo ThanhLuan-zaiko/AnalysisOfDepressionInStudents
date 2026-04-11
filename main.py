@@ -17,6 +17,7 @@ Usage:
 import sys
 import argparse
 import logging
+import json
 from pathlib import Path
 import polars as pl
 import numpy as np
@@ -330,6 +331,9 @@ def main(
     run_famd: bool = False,
     run_split: bool = False,
     conservative: bool = False,
+    run_fairness: bool = False,
+    run_subgroups: bool = False,
+    run_robustness: bool = False,
 ):
     """
     Main analysis pipeline — chạy theo giai đoạn tùy chọn.
@@ -407,6 +411,17 @@ def main(
     if run_models:
         with Timer("Machine Learning"):
             run_ml_pipeline(df, conservative=conservative)
+
+    # ---- Giai đoạn Fairness + Subgroup + Robustness ----
+    if run_fairness or run_subgroups or run_robustness:
+        with Timer("Advanced Analysis"):
+            run_advanced_analysis(
+                df,
+                run_fairness=run_fairness,
+                run_subgroups=run_subgroups,
+                run_robustness=run_robustness,
+                conservative=conservative,
+            )
 
     # ---- Summary ----
     print()
@@ -714,6 +729,220 @@ def run_leakage_investigation(df: pl.DataFrame):
     print(f"\n  ✅ Báo cáo đã lưu: {report_path}")
 
 
+def run_advanced_analysis(
+    df: pl.DataFrame,
+    run_fairness: bool = True,
+    run_subgroups: bool = True,
+    run_robustness: bool = True,
+    conservative: bool = True,
+):
+    """
+    Chạy Fairness + Subgroup + Robustness analysis.
+    Yêu cầu models đã được train trước đó.
+    """
+    from src.ml_models import (
+        DepressionRiskModeler,
+        FairnessAnalyzer,
+        SubgroupAnalyzer,
+        RobustnessAnalyzer,
+    )
+
+    include_suicidal = not conservative
+
+    print("\n" + "=" * 80)
+    print(" 📊 GIAI ĐOẠN NÂNG CAO: FAIRNESS + SUBGROUP + ROBUSTNESS")
+    print("=" * 80)
+
+    # Reload models (they should already be trained)
+    modeler = DepressionRiskModeler()
+    modeler.run_full_pipeline(
+        df,
+        include_suicidal=include_suicidal,
+        output_dir="results/",
+    )
+
+    X, y, feature_names = modeler.prepare_features(df, include_suicidal=include_suicidal)
+
+    # ================================================================
+    # FAIRNESS ANALYSIS
+    # ================================================================
+    if run_fairness:
+        print("\n" + "=" * 80)
+        print(" ⚖️  FAIRNESS ANALYSIS")
+        print("=" * 80)
+
+        fairness = FairnessAnalyzer()
+
+        for model_name in ["logistic", "catboost"]:
+            if model_name not in modeler.models:
+                continue
+
+            model = modeler.models[model_name]
+
+            # Determine feature subset
+            if model_name == "gam" and modeler.preprocessors.get("gam_feature_indices") is not None:
+                X_input = X[:, modeler.preprocessors["gam_feature_indices"]]
+            else:
+                X_input = X
+
+            y_proba = model.predict_proba(X_input)
+            if y_proba.ndim == 2:
+                y_proba = y_proba[:, 1]
+            y_pred = model.predict(X_input)
+            if y_pred.ndim > 1:
+                y_pred = y_pred.flatten()
+
+            print(f"\n  📊 Analyzing fairness for {model_name}...")
+            results = fairness.analyze(df, y, y_proba, y_pred, model_name=model_name)
+
+            # Print report
+            fairness.print_report(results)
+
+            # Save JSON
+            save_path = Path(f"results/fairness_{model_name}.json")
+            with open(save_path, "w", encoding="utf-8") as f:
+                json.dump(results, f, indent=2, ensure_ascii=False, default=str)
+            print(f"     ✅ Saved: {save_path}")
+
+            # Save HTML dashboard
+            dashboard_path = f"results/fairness_dashboard_{model_name}.html"
+            fairness.plot_fairness_dashboard(results, output_path=dashboard_path)
+
+    # ================================================================
+    # SUBGROUP ANALYSIS
+    # ================================================================
+    if run_subgroups:
+        print("\n" + "=" * 80)
+        print(" 🔍 SUBGROUP ANALYSIS")
+        print("=" * 80)
+
+        subgroup = SubgroupAnalyzer()
+
+        for model_name in ["logistic", "catboost"]:
+            if model_name not in modeler.models:
+                continue
+
+            model = modeler.models[model_name]
+
+            if model_name == "gam" and modeler.preprocessors.get("gam_feature_indices") is not None:
+                X_input = X[:, modeler.preprocessors["gam_feature_indices"]]
+            else:
+                X_input = X
+
+            y_proba = model.predict_proba(X_input)
+            if y_proba.ndim == 2:
+                y_proba = y_proba[:, 1]
+            y_pred = model.predict(X_input)
+            if y_pred.ndim > 1:
+                y_pred = y_pred.flatten()
+
+            print(f"\n  🔍 Analyzing subgroups for {model_name}...")
+            results = subgroup.analyze(
+                df, y, y_proba, y_pred,
+                feature_names=feature_names,
+                model_name=model_name,
+            )
+
+            # Print report
+            subgroup.print_report(results)
+
+            # Save JSON
+            save_path = Path(f"results/subgroup_{model_name}.json")
+            with open(save_path, "w", encoding="utf-8") as f:
+                json.dump(results, f, indent=2, ensure_ascii=False, default=str)
+            print(f"     ✅ Saved: {save_path}")
+
+            # Save HTML dashboard
+            dashboard_path = f"results/subgroup_dashboard_{model_name}.html"
+            subgroup.plot_subgroup_dashboard(results, output_path=dashboard_path)
+
+    # ================================================================
+    # ROBUSTNESS ANALYSIS
+    # ================================================================
+    if run_robustness:
+        print("\n" + "=" * 80)
+        print(" 🛡️  ROBUSTNESS ANALYSIS")
+        print("=" * 80)
+
+        robustness = RobustnessAnalyzer(n_bootstrap=500, n_cv_folds=5)
+
+        for model_name in ["logistic", "catboost"]:
+            if model_name not in modeler.models:
+                continue
+
+            model = modeler.models[model_name]
+
+            if model_name == "gam" and modeler.preprocessors.get("gam_feature_indices") is not None:
+                X_input = X[:, modeler.preprocessors["gam_feature_indices"]]
+            else:
+                X_input = X
+
+            y_proba = model.predict_proba(X_input)
+            if y_proba.ndim == 2:
+                y_proba = y_proba[:, 1]
+            y_pred = model.predict(X_input)
+            if y_pred.ndim > 1:
+                y_pred = y_pred.flatten()
+
+            print(f"\n  🛡️  Analyzing robustness for {model_name}...")
+
+            # Define a retraining function for this model
+            def model_trainer(X_train, y_train, X_test, y_test, m=model, name=model_name):
+                """Retrain model and return predictions."""
+                if name == "logistic":
+                    from sklearn.linear_model import LogisticRegression
+                    from sklearn.preprocessing import StandardScaler
+                    scaler = StandardScaler()
+                    X_train_scaled = scaler.fit_transform(X_train)
+                    X_test_scaled = scaler.transform(X_test)
+                    retrained = LogisticRegression(
+                        C=1.0,
+                        class_weight="balanced",
+                        max_iter=1000,
+                        random_state=42,
+                    )
+                    retrained.fit(X_train_scaled, y_train)
+                    y_proba_test = retrained.predict_proba(X_test_scaled)[:, 1]
+                    y_pred_test = retrained.predict(X_test_scaled)
+                    return retrained, y_proba_test, y_pred_test
+                elif name == "catboost":
+                    from catboost import CatBoostClassifier
+                    retrained = CatBoostClassifier(
+                        iterations=500,
+                        learning_rate=0.05,
+                        depth=6,
+                        class_weights=[1.0, 1.5],
+                        random_seed=42,
+                        verbose=0,
+                    )
+                    retrained.fit(X_train, y_train, eval_set=(X_test, y_test), early_stopping_rounds=50)
+                    y_proba_test = retrained.predict_proba(X_test)[:, 1]
+                    y_pred_test = retrained.predict(X_test)
+                    return retrained, y_proba_test, y_pred_test
+                else:
+                    raise ValueError(f"Unknown model: {name}")
+
+            results = robustness.analyze(
+                X_input, y, y_proba, y_pred,
+                feature_names=feature_names,
+                model_trainer=model_trainer,
+                model_name=model_name,
+            )
+
+            # Print report
+            robustness.print_report(results)
+
+            # Save JSON
+            save_path = Path(f"results/robustness_{model_name}.json")
+            with open(save_path, "w", encoding="utf-8") as f:
+                json.dump(results, f, indent=2, ensure_ascii=False, default=str)
+            print(f"     ✅ Saved: {save_path}")
+
+            # Save HTML dashboard
+            dashboard_path = f"results/robustness_dashboard_{model_name}.html"
+            robustness.plot_robustness_dashboard(results, output_path=dashboard_path)
+
+
 def run_ml_pipeline(df: pl.DataFrame, conservative: bool = False):
     """Giai đoạn 7-9: Xây dựng mô hình + Fairness + Threshold.
 
@@ -912,13 +1141,23 @@ if __name__ == "__main__":
                         help="FAMD — Giảm chiều dữ liệu hỗn hợp (numeric + categorical), biểu đồ, top biến đóng góp")
     parser.add_argument("--split", action="store_true",
                         help="Chia tập train/test stratified — kiểm tra cân bằng phân phối")
+    parser.add_argument("--fairness", action="store_true",
+                        help="⚖️  Fairness Analysis: Demographic Parity, Equalized Odds, Disparate Impact")
+    parser.add_argument("--subgroups", action="store_true",
+                        help="🔍 Subgroup Analysis: Performance breakdown, error analysis, calibration")
+    parser.add_argument("--robustness", action="store_true",
+                        help="🛡️  Robustness Analysis: Bootstrap CI, noise injection, feature ablation")
+    parser.add_argument("--analysis", action="store_true",
+                        help="📊 Chạy cả 3: Fairness + Subgroup + Robustness (sau khi đã train models)")
     parser.add_argument("--dataset", type=str, default=DEFAULT_DATASET,
                         help="Đường dẫn đến tệp dataset (mặc định: Student_Depression_Dataset.csv)")
 
     args = parser.parse_args()
 
     # Default: nếu không có flag nào → chạy EDA
-    any_flag = args.eda or args.stats or args.models or args.leakage or args.full or args.review or args.standardize or args.famd or args.split
+    any_flag = (args.eda or args.stats or args.models or args.leakage or args.full
+                or args.review or args.standardize or args.famd or args.split
+                or args.fairness or args.subgroups or args.robustness or args.analysis)
 
     try:
         if args.full:
@@ -933,6 +1172,9 @@ if __name__ == "__main__":
                 run_famd=False,
                 run_split=False,
                 conservative=args.conservative,
+                run_fairness=args.analysis,
+                run_subgroups=args.analysis,
+                run_robustness=args.analysis,
             )
         elif any_flag:
             main(
@@ -947,6 +1189,9 @@ if __name__ == "__main__":
                 run_famd=args.famd,
                 run_split=args.split,
                 conservative=args.conservative,
+                run_fairness=args.fairness or args.analysis,
+                run_subgroups=args.subgroups or args.analysis,
+                run_robustness=args.robustness or args.analysis,
             )
         else:
             # Default: chỉ chạy EDA + ethical

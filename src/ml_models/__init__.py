@@ -7,6 +7,7 @@ Theo kế hoạch khoa học:
   - GAM (linh hoạt, vẫn diễn giải được)
   - CatBoost (dự báo bổ sung)
   - Dummy baseline
+  - Fairness, Subgroup, Robustness analysis
 """
 
 from .predictor import DepressionPredictor
@@ -19,6 +20,9 @@ from .famd import FAMDAnalyzer
 from .stratified_split import StratifiedSplitter
 from .gam_model import GAMClassifier
 from .model_comparator import ModelComparator
+from .fairness_analysis import FairnessAnalyzer
+from .subgroup_analysis import SubgroupAnalyzer
+from .robustness import RobustnessAnalyzer
 
 __all__ = [
     "DepressionPredictor",
@@ -31,4 +35,7 @@ __all__ = [
     "StratifiedSplitter",
     "GAMClassifier",
     "ModelComparator",
+    "FairnessAnalyzer",
+    "SubgroupAnalyzer",
+    "RobustnessAnalyzer",
 ]
