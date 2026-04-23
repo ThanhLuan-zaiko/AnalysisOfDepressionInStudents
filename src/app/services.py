@@ -28,9 +28,6 @@ from sklearn.model_selection import StratifiedKFold, cross_val_predict, train_te
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-from src.ml_models.leakage_check import LabelLeakageInvestigator
-from src.visualization import ExploratoryAnalyzer
-
 from .contracts import (
     ArtifactPolicy,
     ComparisonReport,
@@ -470,6 +467,8 @@ class DepressionAnalysisService:
         export_html: bool = False,
         output_dir: str | Path = "results/app",
     ) -> ProfileReport:
+        from src.visualization import ExploratoryAnalyzer
+
         analyzer = ExploratoryAnalyzer()
         profile = analyzer.generate_data_profile(bundle.frame)
         warnings = self._build_profile_warnings(bundle.frame, profile)
@@ -1039,6 +1038,8 @@ class DepressionAnalysisService:
         df: pl.DataFrame,
         rust_status: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        from src.ml_models.leakage_check import LabelLeakageInvestigator
+
         investigator = LabelLeakageInvestigator(random_state=42)
         cross_tab = investigator.cross_tab_analysis(df)
         feature_comp = investigator.feature_importance_comparison(df)

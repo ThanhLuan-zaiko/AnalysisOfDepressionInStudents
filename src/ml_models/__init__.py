@@ -1,28 +1,13 @@
 """
 Machine Learning Models Module
-Train depression risk prediction models
 
-Theo kế hoạch khoa học:
-  - Logistic Regression (trung tâm, giải thích được)
-  - GAM (linh hoạt, vẫn diễn giải được)
-  - CatBoost (dự báo bổ sung)
-  - Dummy baseline
-  - Fairness, Subgroup, Robustness analysis
+Keep this package light on import. Heavy optional dependencies such as SHAP/IPython
+should only load when the corresponding symbol is actually requested.
 """
 
-from .predictor import DepressionPredictor
-from .optimizer import HyperparameterOptimizer
-from .explainer import SHAPExplainer
-from .imbalanced import ImbalancedDataHandler
-from .risk_model import DepressionRiskModeler
-from .leakage_check import LabelLeakageInvestigator
-from .famd import FAMDAnalyzer
-from .stratified_split import StratifiedSplitter
-from .gam_model import GAMClassifier
-from .model_comparator import ModelComparator
-from .fairness_analysis import FairnessAnalyzer
-from .subgroup_analysis import SubgroupAnalyzer
-from .robustness import RobustnessAnalyzer
+from __future__ import annotations
+
+from importlib import import_module
 
 __all__ = [
     "DepressionPredictor",
@@ -39,3 +24,26 @@ __all__ = [
     "SubgroupAnalyzer",
     "RobustnessAnalyzer",
 ]
+
+_SYMBOL_TO_MODULE = {
+    "DepressionPredictor": ".predictor",
+    "HyperparameterOptimizer": ".optimizer",
+    "SHAPExplainer": ".explainer",
+    "ImbalancedDataHandler": ".imbalanced",
+    "DepressionRiskModeler": ".risk_model",
+    "LabelLeakageInvestigator": ".leakage_check",
+    "FAMDAnalyzer": ".famd",
+    "StratifiedSplitter": ".stratified_split",
+    "GAMClassifier": ".gam_model",
+    "ModelComparator": ".model_comparator",
+    "FairnessAnalyzer": ".fairness_analysis",
+    "SubgroupAnalyzer": ".subgroup_analysis",
+    "RobustnessAnalyzer": ".robustness",
+}
+
+
+def __getattr__(name: str):
+    if name not in _SYMBOL_TO_MODULE:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = import_module(_SYMBOL_TO_MODULE[name], __name__)
+    return getattr(module, name)

@@ -2,132 +2,214 @@
 
 ## Mục tiêu
 
-CLI App của repo này là lớp chạy gọn cho hệ thống phân tích trầm cảm dành cho dữ liệu sinh viên Việt Nam. Thay vì gọi trực tiếp `main.py` với nhiều cờ, người dùng mới có thể bắt đầu từ lệnh ngắn `robot`.
+`robot` là lệnh ngắn để mở ứng dụng phân tích trong repo này. Nếu máy đã có `textual`, `robot` sẽ mở TUI. Nếu chưa có, `robot` sẽ tự chuyển sang menu console.
 
-## Yêu cầu tối thiểu
+Người mới nên bắt đầu từ `robot` thay vì gọi trực tiếp `main.py`.
 
-- Python theo phiên bản repo đang khai báo trong `.python-version`
-- `uv`
-- Môi trường ảo `.venv` đã được đồng bộ dependency
+Nếu bạn chỉ cần nhớ thao tác bàn phím trong giao diện, xem thêm [TUI_HOTKEYS.md](./TUI_HOTKEYS.md).
 
 ## Cài nhanh
 
 Trong thư mục repo:
 
 ```powershell
-uv sync
+.\setup_with_gpu.ps1
 ```
 
-Nếu muốn giao diện TUI:
+Script này hiện đã:
 
-```powershell
-uv sync --extra tui
-```
+- tạo `.venv`
+- cài dependency chính
+- cài `rich` và `textual`
+- tạo launcher `robot` và `robot-tui`
+- thêm thư mục launcher vào `PATH` người dùng nếu cần
 
-## Chạy nhanh nhất
+Sau khi setup xong, mở một cửa sổ PowerShell mới rồi chạy:
 
 ```powershell
 robot
 ```
 
-Hành vi hiện tại:
+## Dataset mặc định
 
-- Nếu đã cài `textual`, `robot` sẽ mở giao diện TUI.
-- Nếu chưa cài `textual`, `robot` sẽ tự rơi về console CLI và chạy preset mặc định.
+Nếu không truyền `--dataset`, app sẽ dùng:
 
-## Các chế độ chạy chính
+```text
+Student_Depression_Dataset.csv
+```
 
-### 1. Xem hồ sơ dữ liệu
+Bạn vẫn có thể chỉ định file khác bằng `--dataset`.
+
+## Chạy từng chức năng
+
+### 1. Mở ứng dụng
+
+```powershell
+robot
+```
+
+Ứng dụng sẽ mở TUI nếu `textual` đã có. Trong TUI:
+
+- `1`: chạy hồ sơ dữ liệu
+- `2`: chạy pipeline theo profile và preset đang chọn
+- `3`: so sánh `safe` và `full`
+- `r`: chạy lại tác vụ hiện tại
+- `:`: mở command palette
+- `q`: thoát
+
+### 2. Hồ sơ dữ liệu
 
 ```powershell
 robot profile --dataset Student_Depression_Dataset.csv
 ```
 
-Lệnh này dùng để:
+Chức năng này dùng để:
 
 - xem số dòng, số cột
-- xem tỷ lệ dương tính của nhãn `Depression`
-- xem các cột được chọn cho profile `safe` và `full`
-- phát hiện cảnh báo leakage hoặc dữ liệu hiếm
+- xem tỷ lệ nhãn `Depression`
+- xem cột nào được chọn cho `safe` và `full`
+- hiện cảnh báo leakage, missing value, rare category
 
-### 2. Chạy pipeline nhanh
-
-```powershell
-robot run --profile safe --preset quick --console-only
-```
-
-Ý nghĩa:
-
-- `--profile safe`: bỏ biến nhạy cảm có nguy cơ leakage cao
-- `--preset quick`: chạy nhanh với đường đánh giá holdout-first
-- `--console-only`: chỉ in kết quả ra terminal, không cố ghi artifact JSON/HTML
-
-### 3. Chạy pipeline nghiên cứu
+Nếu chỉ muốn in ra terminal, không ghi file:
 
 ```powershell
-robot run --profile safe --preset research --console-only
+robot profile --dataset Student_Depression_Dataset.csv --console-only
 ```
 
-Khác biệt của `research`:
-
-- có thêm GAM
-- ưu tiên dùng `rust_engine` khi dữ liệu đủ lớn
-- nếu Rust không sẵn sàng hoặc gặp lỗi, app tự fallback về `pyGAM`
-
-### 4. So sánh `safe` và `full`
+Nếu muốn xuất HTML EDA:
 
 ```powershell
-robot compare --preset quick --console-only
+robot profile --dataset Student_Depression_Dataset.csv --full-export --export-html
 ```
 
-Lệnh này giúp thấy rõ:
+### 3. Chạy nhanh an toàn
 
-- AUC/F1 của profile an toàn
-- AUC/F1 của profile đầy đủ
-- phần chênh lệch có thể đến từ leakage
+```powershell
+robot run --dataset Student_Depression_Dataset.csv --profile safe --preset quick --console-only
+```
 
-## Khi nào nên dùng `main.py`
+Đây là lệnh nên dùng đầu tiên khi muốn đánh giá mô hình mà hạn chế leakage.
 
-`main.py` vẫn được giữ để tương thích với luồng cũ, nhưng người mới nên ưu tiên `robot`.
+`safe` bỏ biến:
 
-Ví dụ tương đương:
+```text
+Have you ever had suicidal thoughts ?
+```
+
+### 4. Chạy nhanh đầy đủ
+
+```powershell
+robot run --dataset Student_Depression_Dataset.csv --profile full --preset quick --console-only
+```
+
+`full` giữ biến nhạy cảm để bạn nhìn thấy mức tăng accuracy và rủi ro leakage.
+
+### 5. Chạy nghiên cứu
+
+```powershell
+robot run --dataset Student_Depression_Dataset.csv --profile safe --preset research --console-only
+```
+
+Preset `research` sẽ sâu hơn `quick`:
+
+- thêm GAM
+- hiện metadata nghiên cứu nhiều hơn
+- ưu tiên Rust engine nếu điều kiện phù hợp
+- fallback về `pyGAM` nếu Rust không sẵn sàng
+
+### 6. So sánh `safe` và `full`
+
+```powershell
+robot compare --dataset Student_Depression_Dataset.csv --preset quick --console-only
+```
+
+Chức năng này chạy cùng một split cho hai profile để bạn xem:
+
+- `roc_auc`
+- `f1`
+- `recall`
+- độ lệch giữa `full` và `safe`
+
+### 7. Mở thẳng TUI
+
+```powershell
+robot-tui
+```
+
+Hoặc:
+
+```powershell
+robot
+```
+
+Nếu `textual` đã được cài.
+
+## Command Palette Trong TUI
+
+Nhấn `:` rồi nhập một trong các lệnh sau:
+
+```text
+:help
+:profile
+:run
+:compare
+:rerun
+:set profile safe
+:set profile full
+:set preset quick
+:set preset research
+:set dataset Student_Depression_Dataset.csv
+```
+
+## Ý nghĩa profile
+
+### `safe`
+
+- phù hợp đánh giá thực dụng
+- giảm nguy cơ leakage
+- nên dùng khi báo cáo hoặc demo chính
+
+### `full`
+
+- dùng để so sánh nghiên cứu
+- giữ biến nhạy cảm
+- dễ có accuracy cao hơn nhưng rủi ro leakage lớn hơn
+
+## Ý nghĩa preset
+
+### `quick`
+
+- chạy nhanh hơn
+- phù hợp smoke test, demo, kiểm tra pipeline
+- thường gồm `logistic` và `catboost`
+
+### `research`
+
+- chạy sâu hơn
+- thêm `gam`
+- có thêm metadata phục vụ phân tích
+
+## Khi nào dùng `main.py`
+
+`main.py` vẫn còn để tương thích luồng cũ, nhưng với người mới thì nên ưu tiên:
+
+```powershell
+robot
+```
+
+Nếu cần kiểm tra đường legacy:
 
 ```powershell
 .\.venv\Scripts\python.exe main.py --quick --profile safe --console-only
 ```
 
-## Ý nghĩa các profile
-
-### `safe`
-
-- dùng cho đánh giá thực dụng
-- tránh dựa trực tiếp vào biến nhạy cảm `Have you ever had suicidal thoughts ?`
-
-### `full`
-
-- dùng để so sánh nghiên cứu
-- giữ biến nhạy cảm để đo mức chênh accuracy và rủi ro leakage
-
-## Ý nghĩa các preset
-
-### `quick`
-
-- nhanh hơn
-- phù hợp để smoke test hoặc trình diễn
-- thường chạy `logistic` và `catboost`
-
-### `research`
-
-- sâu hơn
-- có thêm `gam`
-- có research summary và metadata về Rust engine
-
-## Một số lệnh nên nhớ
+## Lệnh nên nhớ
 
 ```powershell
 robot
-robot profile --dataset Student_Depression_Dataset.csv
+robot profile --dataset Student_Depression_Dataset.csv --console-only
 robot run --dataset Student_Depression_Dataset.csv --profile safe --preset quick --console-only
+robot run --dataset Student_Depression_Dataset.csv --profile full --preset quick --console-only
 robot run --dataset Student_Depression_Dataset.csv --profile safe --preset research --console-only
 robot compare --dataset Student_Depression_Dataset.csv --preset quick --console-only
 robot-tui
@@ -135,36 +217,45 @@ robot-tui
 
 ## Xử lý sự cố nhanh
 
-### `robot` báo chưa có `textual`
+### `robot` không mở TUI
 
-Chạy:
+Chạy lại setup:
 
 ```powershell
-uv sync --extra tui
+.\setup_with_gpu.ps1
 ```
 
-Hoặc cứ dùng CLI console vì app đã có fallback.
+Hoặc cài nhanh riêng `textual`:
 
-### Không ghi được file vào `results/` hoặc `logs/`
+```powershell
+uv pip install "textual>=0.86.0"
+```
 
-Dùng:
+### Không ghi được file trong `results/` hoặc `logs/`
+
+Dùng chế độ chỉ in terminal:
 
 ```powershell
 robot run --profile safe --preset quick --console-only
 ```
 
-Tùy chọn này rất hữu ích trong môi trường sandbox hoặc máy có quyền ghi hạn chế.
-
 ### Muốn biết GAM có dùng Rust hay không
 
-Chạy preset `research`. Report sẽ in metadata của model và trạng thái `rust_engine`.
+Chạy:
 
-## Gợi ý cho người mới trong repo
+```powershell
+robot run --dataset Student_Depression_Dataset.csv --profile safe --preset research --console-only
+```
+
+Sau đó xem phần metadata của model `gam`.
+
+## Gợi ý cho người mới
 
 Thứ tự đọc hợp lý:
 
 1. `docs/CLI_APP.md`
 2. `README.md`
 3. `src/cli/entrypoint.py`
-4. `src/app/services.py`
-5. `src/entrypoints/main_dispatch.py`
+4. `src/cli/textual_app.py`
+5. `src/app/services.py`
+6. `src/entrypoints/main_dispatch.py`

@@ -160,6 +160,101 @@ function Invoke-LoggedNativeCommand {
     }
 }
 
+function Ensure-UserPathEntry {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PathEntry
+    )
+
+    $normalizedEntry = $PathEntry.Trim().TrimEnd('\')
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $pathParts = @()
+    if ($userPath) {
+        $pathParts = $userPath.Split(';') | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    }
+
+    $alreadyPresent = $pathParts | Where-Object {
+        $_.Trim().TrimEnd('\').ToLowerInvariant() -eq $normalizedEntry.ToLowerInvariant()
+    }
+
+    if (-not $alreadyPresent) {
+        $newUserPath = if ([string]::IsNullOrWhiteSpace($userPath)) {
+            $normalizedEntry
+        } else {
+            "$userPath;$normalizedEntry"
+        }
+        [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+        Write-Host "[OK] Added $normalizedEntry to user PATH" -ForegroundColor Green
+    } else {
+        Write-Host "[OK] User PATH already contains $normalizedEntry" -ForegroundColor Green
+    }
+
+    $sessionParts = $env:Path.Split(';') | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $sessionPresent = $sessionParts | Where-Object {
+        $_.Trim().TrimEnd('\').ToLowerInvariant() -eq $normalizedEntry.ToLowerInvariant()
+    }
+    if (-not $sessionPresent) {
+        $env:Path = "$env:Path;$normalizedEntry"
+        Write-Host "[OK] Added $normalizedEntry to current session PATH" -ForegroundColor Green
+    }
+}
+
+function Install-RobotLaunchers {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot
+    )
+
+    $launcherDir = Join-Path $env:USERPROFILE ".local\bin"
+    New-Item -ItemType Directory -Path $launcherDir -Force | Out-Null
+
+    $resolvedRepoRoot = (Resolve-Path $RepoRoot).Path
+    $robotCmdPath = Join-Path $launcherDir "robot.cmd"
+    $robotTuiCmdPath = Join-Path $launcherDir "robot-tui.cmd"
+
+    $robotCmd = @"
+@echo off
+setlocal
+set "APP_DIR=$resolvedRepoRoot"
+if exist "%CD%\.venv\Scripts\python.exe" if exist "%CD%\src\cli\entrypoint.py" set "APP_DIR=%CD%"
+pushd "%APP_DIR%"
+if not exist ".venv\Scripts\python.exe" (
+  echo Missing .venv\Scripts\python.exe in %APP_DIR%
+  exit /b 1
+)
+".venv\Scripts\python.exe" -m src.cli.entrypoint %*
+set "CODE=%ERRORLEVEL%"
+popd
+exit /b %CODE%
+"@
+
+    $robotTuiCmd = @"
+@echo off
+setlocal
+set "APP_DIR=$resolvedRepoRoot"
+if exist "%CD%\.venv\Scripts\python.exe" if exist "%CD%\src\cli\entrypoint.py" set "APP_DIR=%CD%"
+pushd "%APP_DIR%"
+if not exist ".venv\Scripts\python.exe" (
+  echo Missing .venv\Scripts\python.exe in %APP_DIR%
+  exit /b 1
+)
+".venv\Scripts\python.exe" -c "from src.cli.entrypoint import run_tui; raise SystemExit(run_tui())"
+set "CODE=%ERRORLEVEL%"
+popd
+exit /b %CODE%
+"@
+
+    Set-Content -Path $robotCmdPath -Value $robotCmd -Encoding ASCII
+    Set-Content -Path $robotTuiCmdPath -Value $robotTuiCmd -Encoding ASCII
+    Ensure-UserPathEntry -PathEntry $launcherDir
+
+    return @{
+        LauncherDir = $launcherDir
+        RobotCmd = $robotCmdPath
+        RobotTuiCmd = $robotTuiCmdPath
+    }
+}
+
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host " GPU Detection & Package Setup Script" -ForegroundColor Cyan
 Write-Host " Windows Edition (Admin Mode)" -ForegroundColor Yellow
@@ -384,6 +479,9 @@ Write-Host ""
 
 $successPackages = @()
 $failedPackages = @()
+$cliTuiInstalled = $false
+$robotLauncherInstalled = $false
+$robotLauncherDir = $null
 
 # Strategy 1: Try bulk install first (much faster)
 Write-Host "[Strategy 1] Attempting bulk installation..." -ForegroundColor Cyan
@@ -462,6 +560,30 @@ if ($failedPackages.Count -gt 0) {
     Write-Host "  ⏱️  Time Series: darts, neuralprophet" -ForegroundColor Gray
     Write-Host "  🔄 Online ML: vowpalwabbit" -ForegroundColor Gray
     Write-Host "  🏥 Survival: lifelines" -ForegroundColor Gray
+}
+
+Write-Host ""
+
+# Step 2b: Install CLI/TUI packages separately
+# IMPORTANT: Use `uv pip install` instead of `uv sync --extra tui`
+# because the full project resolver can fail on unrelated packages
+# such as neuralprophet, while textual itself installs fine.
+Write-Host "Step 2b: Installing CLI/TUI packages..." -ForegroundColor Yellow
+Write-Host "" 
+Write-Host "Installing: rich, textual>=0.86.0" -ForegroundColor Gray
+
+$cliTuiExitCode = Invoke-LoggedNativeCommand -Command {
+    uv pip install rich "textual>=0.86.0"
+} -Indent "    " -Color Gray
+
+if ($cliTuiExitCode -eq 0) {
+    $cliTuiInstalled = $true
+    Write-Host "✅ CLI/TUI packages installed successfully" -ForegroundColor Green
+    Write-Host "   `robot` can use Textual TUI directly." -ForegroundColor Green
+} else {
+    Write-Host "⚠️  CLI/TUI package installation failed" -ForegroundColor Yellow
+    Write-Host "   `robot` will continue to work in console mode." -ForegroundColor Yellow
+    Write-Host "   Manual fallback: uv pip install `"textual>=0.86.0`"" -ForegroundColor Gray
 }
 
 Write-Host ""
@@ -802,6 +924,22 @@ Write-Host "[SAC] Running post-installation DLL unblock..." -ForegroundColor Cya
 Mitigate-SAC-Blocks
 Write-Host ""
 
+# Step 4b: Install global robot launchers
+Write-Host "Step 4b: Installing robot launchers..." -ForegroundColor Yellow
+Write-Host ""
+try {
+    $launcherInfo = Install-RobotLaunchers -RepoRoot $PSScriptRoot
+    $robotLauncherInstalled = $true
+    $robotLauncherDir = $launcherInfo.LauncherDir
+    Write-Host "✅ Installed robot launchers to $robotLauncherDir" -ForegroundColor Green
+    Write-Host "   Available commands: robot, robot-tui" -ForegroundColor Green
+} catch {
+    Write-Host "⚠️  Could not install robot launchers: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-Host "   You can still run .\robot.cmd from the repo root." -ForegroundColor Yellow
+}
+
+Write-Host ""
+
 # Step 5: Run verification
 Write-Host "Step 5: Running GPU & Rust engine verification..." -ForegroundColor Yellow
 Write-Host ""
@@ -835,6 +973,8 @@ Write-Host " Installation Complete!" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  GPU Type: $($gpuType.ToUpper())" -ForegroundColor Cyan
 Write-Host "  Rust Engine: $(if (Test-Path (Join-Path $PSScriptRoot 'rust_engine')) { 'Configured' } else { 'Not found' })" -ForegroundColor Cyan
+Write-Host "  CLI/TUI: $(if ($cliTuiInstalled) { 'Textual ready' } else { 'Console mode only' })" -ForegroundColor Cyan
+Write-Host "  Robot Launcher: $(if ($robotLauncherInstalled) { "Installed at $robotLauncherDir" } else { 'Repo-local only' })" -ForegroundColor Cyan
 Write-Host "  Status: Success" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
@@ -862,5 +1002,12 @@ if (Test-Path (Join-Path $PSScriptRoot 'rust_engine')) {
 
 Write-Host ""
 Write-Host "Start your analysis with:" -ForegroundColor Cyan
+Write-Host "  robot" -ForegroundColor Gray
+Write-Host "  robot-tui" -ForegroundColor Gray
 Write-Host "  uv run python main.py --models" -ForegroundColor Gray
+if ($robotLauncherInstalled) {
+    Write-Host ""
+    Write-Host "If this is a brand-new terminal session, `robot` should work immediately." -ForegroundColor Gray
+    Write-Host "If another terminal was already open before setup, open a new one to refresh PATH." -ForegroundColor Gray
+}
 Write-Host ""

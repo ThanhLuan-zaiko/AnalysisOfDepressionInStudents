@@ -1,6 +1,14 @@
 from __future__ import annotations
 
 from typing import Any
+import warnings
+
+warnings.filterwarnings(
+    "ignore",
+    message="'return' in a 'finally' block",
+    category=SyntaxWarning,
+    module=r"rich\.segment",
+)
 
 try:
     from rich.console import Console
@@ -50,6 +58,28 @@ def print_banner(console: Any | None = None) -> None:
             title="Vietnamese Depression Analysis",
         )
     )
+
+
+def print_status(message: str, console: Any | None = None) -> None:
+    if console is None:
+        print(message)
+        return
+    console.print(f"[{PALETTE['accent']}]{message}[/]")
+
+
+def prompt_text(
+    message: str,
+    default: str | None = None,
+    console: Any | None = None,
+) -> str:
+    if console is not None:
+        console.print(message, end="")
+    else:
+        print(message, end="")
+    value = input().strip()
+    if value:
+        return value
+    return default or ""
 
 
 def print_warnings(warnings: list[str], console: Any | None = None) -> None:

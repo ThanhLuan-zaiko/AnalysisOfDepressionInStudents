@@ -5,6 +5,7 @@ Thư mục này dành cho người mới clone repo và cần chạy ứng dụn
 ## Bắt đầu từ đâu
 
 - Đọc [CLI_APP.md](./CLI_APP.md) để biết cách chạy ứng dụng bằng lệnh ngắn `robot`.
+- Đọc [TUI_HOTKEYS.md](./TUI_HOTKEYS.md) để thao tác nhanh trong giao diện TUI.
 - Đọc [GITHUB_DOCS_QUYEN.md](./GITHUB_DOCS_QUYEN.md) để hiểu cách repo đang khóa review riêng cho thư mục `docs/`.
 
 ## Lối chạy ngắn nhất

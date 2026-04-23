@@ -64,8 +64,17 @@ catboost_training.log
 *.tsv
 
 # Generated data artifacts (auto-generated, do NOT commit)
-results/
-logs/
+results/*
+!results/test-fixtures/
+results/test-fixtures/*
+!results/test-fixtures/.gitkeep
+!results/app_cache/
+results/app_cache/*
+!results/app_cache/datasets/
+results/app_cache/datasets/*
+!results/app_cache/datasets/.gitkeep
+logs/*
+!logs/.gitkeep
 
 # Rust
 rust_engine/target/
