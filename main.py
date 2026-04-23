@@ -1155,10 +1155,114 @@ def run_ml_pipeline(df: pl.DataFrame, conservative: bool = False):
 
 
 # ==========================================
+# MODERN PIPELINE BRIDGE
+# ==========================================
+
+def run_modern_pipeline_cli(
+    dataset_path: str,
+    preset: str = "quick",
+    profile: str = "safe",
+    compare: bool = False,
+    export_html: bool = False,
+):
+    """Bridge to the new holdout-first pipeline while keeping main.py compatible."""
+    from src.app import ArtifactPolicy, RunPreset, RunProfile
+    from src.app import compare_profiles, load_dataset as load_dataset_v2
+    from src.app import profile_dataset as profile_dataset_v2
+    from src.app import run_pipeline as run_pipeline_v2
+
+    artifact_policy = ArtifactPolicy.FULL_EXPORT if export_html else ArtifactPolicy.JSON
+    bundle = load_dataset_v2(dataset_path)
+    profile_report = profile_dataset_v2(
+        bundle=bundle,
+        artifact_policy=artifact_policy,
+        export_html=export_html,
+        output_dir="results/app",
+    )
+
+    print("\n" + "=" * 80)
+    print(" MODERN PIPELINE - HOLDOUT-FIRST")
+    print("=" * 80)
+    print(f"Dataset: {dataset_path}")
+    print(f"   OK {profile_report.summary['rows']:,} rows x {profile_report.summary['cols']} cols")
+    print(f"   OK Positive rate: {profile_report.summary['target_positive_rate']}%")
+    print(f"   OK Cache: {'used' if profile_report.summary['loaded_from_cache'] else 'fresh load'}")
+
+    if profile_report.warnings:
+        print("\nProfile warnings:")
+        for warning in profile_report.warnings:
+            print(f"   - {warning}")
+
+    if compare:
+        comparison = compare_profiles(
+            bundle=bundle,
+            preset=RunPreset(preset),
+            artifact_policy=artifact_policy,
+            output_dir="results/app",
+        )
+        print("\nSafe vs Full comparison:")
+        for model_name, summary in comparison.summary.items():
+            print(f"   - {model_name}:")
+            print(f"      safe ROC-AUC = {summary['safe_roc_auc']}")
+            print(f"      full ROC-AUC = {summary['full_roc_auc']}")
+            print(f"      delta        = {summary['roc_auc_delta_full_minus_safe']}")
+            print(f"      safe F1      = {summary['safe_f1']}")
+            print(f"      full F1      = {summary['full_f1']}")
+        if comparison.artifacts:
+            print("\nArtifacts:")
+            for name, path in comparison.artifacts.items():
+                print(f"   - {name}: {path}")
+        return
+
+    report = run_pipeline_v2(
+        bundle=bundle,
+        profile=RunProfile(profile),
+        preset=RunPreset(preset),
+        artifact_policy=artifact_policy,
+        output_dir="results/app",
+    )
+    print(f"\nRun config: profile={report.config['profile']} preset={report.config['preset']}")
+    print(f"   models: {', '.join(report.config['models'])}")
+    print(f"   selected columns: {', '.join(report.config['selected_columns'])}")
+
+    for model_name, result in report.models.items():
+        print(f"\n{model_name.upper()}:")
+        print(f"   OOF ROC-AUC:     {result.oof.get('roc_auc')}")
+        print(f"   Holdout ROC-AUC: {result.holdout.get('roc_auc')}")
+        print(f"   Holdout F1:      {result.holdout.get('f1')}")
+        print(f"   Holdout Recall:  {result.holdout.get('recall')}")
+        print(f"   Holdout Brier:   {result.holdout.get('brier_score')}")
+        print(f"   Best F1 threshold: {result.thresholds['best_f1']['threshold']}")
+
+    print("\nTimings:")
+    for stage, seconds in report.timings.items():
+        print(f"   - {stage}: {seconds}s")
+
+    if report.warnings:
+        print("\nRun warnings:")
+        for warning in report.warnings:
+            print(f"   - {warning}")
+
+    if report.artifacts:
+        print("\nArtifacts:")
+        for name, path in report.artifacts.items():
+            print(f"   - {name}: {path}")
+
+
+# ==========================================
 # ENTRY POINT
 # ==========================================
 
 if __name__ == "__main__":
+    from src.entrypoints.main_dispatch import dispatch_main_cli
+
+    dispatch_main_cli(
+        legacy_main=main,
+        default_dataset=DEFAULT_DATASET,
+        logger=logger,
+    )
+    sys.exit(0)
+
     parser = argparse.ArgumentParser(
         description="Phân Tích Trầm Cảm — Pipeline có kiểm soát đạo đức"
     )
@@ -1194,6 +1298,16 @@ if __name__ == "__main__":
                         help="📊 Chạy cả 3: Fairness + Subgroup + Robustness (sau khi đã train models)")
     parser.add_argument("--report", action="store_true",
                         help="📝 Auto-generate comprehensive report (Markdown + HTML) từ tất cả kết quả")
+    parser.add_argument("--quick", action="store_true",
+                        help="Modern pipeline: quick preset")
+    parser.add_argument("--research", action="store_true",
+                        help="Modern pipeline: research preset")
+    parser.add_argument("--profile", type=str, default="safe", choices=["safe", "full"],
+                        help="Modern pipeline profile: safe or full")
+    parser.add_argument("--compare-profiles", action="store_true",
+                        help="Modern pipeline: compare safe vs full")
+    parser.add_argument("--export-html", action="store_true",
+                        help="Modern pipeline: export HTML EDA and artifacts")
     parser.add_argument("--dataset", type=str, default=DEFAULT_DATASET,
                         help="Đường dẫn đến tệp dataset (mặc định: Student_Depression_Dataset.csv)")
 
@@ -1202,10 +1316,19 @@ if __name__ == "__main__":
     # Default: nếu không có flag nào → chạy EDA
     any_flag = (args.eda or args.stats or args.models or args.leakage or args.full
                 or args.review or args.standardize or args.famd or args.split
-                or args.fairness or args.subgroups or args.robustness or args.analysis or args.report)
+                or args.fairness or args.subgroups or args.robustness or args.analysis or args.report
+                or args.quick or args.research or args.compare_profiles)
 
     try:
-        if args.full:
+        if args.quick or args.research or args.compare_profiles:
+            run_modern_pipeline_cli(
+                dataset_path=args.dataset,
+                preset="research" if args.research else "quick",
+                profile=args.profile,
+                compare=args.compare_profiles,
+                export_html=args.export_html,
+            )
+        elif args.full:
             main(
                 dataset_path=args.dataset,
                 run_ethical=not args.no_ethical,

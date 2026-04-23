@@ -46,8 +46,15 @@ def setup_logging(
     handlers = [logging.StreamHandler()]  # Console
     
     if log_file:
-        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
-        handlers.append(logging.FileHandler(log_file, encoding='utf-8'))
+        try:
+            Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+            handlers.append(logging.FileHandler(log_file, encoding='utf-8'))
+        except OSError as exc:
+            logging.getLogger(__name__).warning(
+                "Could not attach file logger %s: %s. Falling back to console only.",
+                log_file,
+                exc,
+            )
     
     # Configure root logger
     logging.basicConfig(

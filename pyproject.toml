@@ -46,11 +46,20 @@ dependencies = [
     "torchaudio>=2.11.0",
 ]
 
-# Local Rust engine (rust_engine) — built via maturin
+[project.scripts]
+depression-cli = "src.cli.entrypoint:main"
+depression-tui = "src.cli.entrypoint:run_tui"
+robot = "src.cli.entrypoint:main"
+robot-tui = "src.cli.entrypoint:run_tui"
+
+[project.optional-dependencies]
+tui = [
+    "textual>=0.86.0",
+]
+
 [tool.uv.sources]
 rust_engine = { path = "rust_engine", editable = true }
 
-# PyTorch CUDA index
 [[tool.uv.index]]
 name = "pytorch-cu126"
 url = "https://download.pytorch.org/whl/cu126"

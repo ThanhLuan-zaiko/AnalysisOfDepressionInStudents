@@ -309,6 +309,35 @@ class GAMClassifier:
         logger.info(f"GAM: ROC-AUC={metrics['roc_auc']:.4f}, F1={metrics['f1']:.4f}")
         return metrics
     
+    def _normalize_partial_dependence(
+        self,
+        raw_result: Any,
+        XX: np.ndarray,
+        feature_idx: int,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Handle both legacy dict outputs and current pyGAM tuple/ndarray outputs."""
+        if isinstance(raw_result, dict):
+            grid = np.asarray(raw_result.get('grid', XX[:, feature_idx]))
+            pd_values = np.asarray(raw_result.get('partial_dependence', []))
+            ci = np.asarray(raw_result.get('conf_intervals', np.full((len(pd_values), 2), np.nan)))
+            return grid.flatten(), pd_values.flatten(), ci
+
+        if isinstance(raw_result, tuple):
+            pd_values = np.asarray(raw_result[0])
+            ci = (
+                np.asarray(raw_result[1])
+                if len(raw_result) > 1
+                else np.full((len(pd_values), 2), np.nan)
+            )
+            return XX[:, feature_idx].flatten(), pd_values.flatten(), ci
+
+        pd_values = np.asarray(raw_result)
+        return (
+            XX[:, feature_idx].flatten(),
+            pd_values.flatten(),
+            np.full((len(pd_values), 2), np.nan),
+        )
+
     def _compute_feature_importance(self, X: np.ndarray) -> List[Dict]:
         """
         Tính feature importance. 
@@ -324,8 +353,9 @@ class GAMClassifier:
         for i, feat_name in enumerate(self.feature_names):
             try:
                 XX = self.model.generate_X_grid(term=i)
-                partial_dependence = self.model.partial_dependence(term=i, X=XX)
-                effect_variance = float(np.var(partial_dependence['partial_dependence']))
+                raw_result = self.model.partial_dependence(term=i, X=XX)
+                _, pd_values, _ = self._normalize_partial_dependence(raw_result, XX, i)
+                effect_variance = float(np.var(pd_values))
                 importance_list.append({
                     "feature": feat_name,
                     "variance_importance": round(effect_variance, 6),
@@ -360,13 +390,8 @@ class GAMClassifier:
             raise ValueError("Model not trained yet. Call train() first.")
         
         XX = self.model.generate_X_grid(term=feature_idx, n_points=n_points)
-        pd_dict = self.model.partial_dependence(term=feature_idx, X=XX, width=0.95)
-        
-        X_values = pd_dict['grid']
-        pd_values = pd_dict['partial_dependence']
-        ci = pd_dict['conf_intervals']
-        
-        return X_values.flatten(), pd_values.flatten(), ci
+        raw_result = self.model.partial_dependence(term=feature_idx, X=XX, width=0.95)
+        return self._normalize_partial_dependence(raw_result, XX, feature_idx)
     
     def plot_partial_dependence(
         self,

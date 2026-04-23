@@ -2,6 +2,12 @@
 
 > Dự án phân tích dữ liệu và ứng dụng machine learning để phát hiện, phân tích các mẫu hình trầm cảm trong học sinh sinh viên.
 
+## Tài Liệu Nhanh
+
+- CLI App: [docs/CLI_APP.md](docs/CLI_APP.md)
+- Tổng quan tài liệu: [docs/README.md](docs/README.md)
+- Review và quyền cho `docs/`: [docs/GITHUB_DOCS_QUYEN.md](docs/GITHUB_DOCS_QUYEN.md)
+
 ## 📋 Tổng Quan
 
 Dự án này cung cấp một bộ công cụ hoàn chỉnh để phân tích trầm cảm trong cộng đồng học sinh sinh viên, bao gồm:
