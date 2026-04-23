@@ -3,6 +3,10 @@
 # Supports: NVIDIA CUDA, AMD ROCm (via WSL2), Intel XPU, Apple MPS, CPU fallback
 # Requires: Administrator privileges to bypass Smart App Control restrictions
 
+param(
+    [switch]$SkipElevation
+)
+
 $ErrorActionPreference = "Stop"
 
 # ============================================================
@@ -13,7 +17,7 @@ function Test-Administrator {
     return $currentUser.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-if (-not (Test-Administrator)) {
+if (-not (Test-Administrator) -and -not $SkipElevation) {
     Write-Host "[!] Administrator privileges required!" -ForegroundColor Red
     Write-Host "    Smart App Control (SAC) may block Python 3.14 DLLs without admin rights." -ForegroundColor Yellow
     Write-Host ""
@@ -35,10 +39,20 @@ if (-not (Test-Administrator)) {
         Write-Host "  Continuing without admin rights (SAC blocks may occur)..." -ForegroundColor Yellow
         Start-Sleep -Seconds 3
     }
+} elseif (-not (Test-Administrator)) {
+    Write-Host "[WARN] Running without Administrator privileges (--SkipElevation)" -ForegroundColor Yellow
 } else {
     Write-Host "[OK] Running with Administrator privileges" -ForegroundColor Green
 }
 
+Write-Host ""
+
+# Keep uv cache inside the project to avoid permission mismatches between
+# elevated/non-elevated runs and sandboxed environments.
+$projectUvCache = Join-Path $PSScriptRoot ".uv-cache"
+New-Item -ItemType Directory -Path $projectUvCache -Force | Out-Null
+$env:UV_CACHE_DIR = $projectUvCache
+Write-Host "[INFO] Using project-local uv cache: $projectUvCache" -ForegroundColor Gray
 Write-Host ""
 
 # ============================================================
@@ -160,6 +174,43 @@ function Invoke-LoggedNativeCommand {
     }
 }
 
+function Ensure-VirtualEnvironment {
+    $venvPath = Join-Path $PSScriptRoot ".venv"
+    $venvPython = Join-Path $venvPath "Scripts\python.exe"
+
+    if (Test-Path $venvPython) {
+        $env:VIRTUAL_ENV = $venvPath
+        Write-Host "[OK] Using existing virtual environment: $venvPath" -ForegroundColor Green
+        Write-Host ""
+        return
+    }
+
+    Write-Host "Preparing project virtual environment..." -ForegroundColor Yellow
+    $venvExitCode = Invoke-LoggedNativeCommand -Command { uv venv .venv } -Indent "    "
+
+    if ($venvExitCode -ne 0 -or -not (Test-Path $venvPython)) {
+        Write-Host "❌ Failed to create virtual environment at $venvPath" -ForegroundColor Red
+        exit 1
+    }
+
+    $env:VIRTUAL_ENV = $venvPath
+    Write-Host "✅ Virtual environment ready: $venvPath" -ForegroundColor Green
+    Write-Host ""
+}
+
+function Install-CpuPyTorch {
+    param(
+        [switch]$ForceReinstall
+    )
+
+    $command = { uv pip install --no-config torch torchvision torchaudio --index-url https://pypi.org/simple }
+    if ($ForceReinstall) {
+        $command = { uv pip install --no-config torch torchvision torchaudio --index-url https://pypi.org/simple --force-reinstall }
+    }
+
+    return Invoke-LoggedNativeCommand -Command $command -Indent "    " -Color Gray
+}
+
 function Ensure-UserPathEntry {
     param(
         [Parameter(Mandatory = $true)]
@@ -260,6 +311,8 @@ Write-Host " GPU Detection & Package Setup Script" -ForegroundColor Cyan
 Write-Host " Windows Edition (Admin Mode)" -ForegroundColor Yellow
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
+
+Ensure-VirtualEnvironment
 
 # Function to detect GPU type with comprehensive checks
 function Get-GpuType {
@@ -468,13 +521,14 @@ $commonPackages = @(
     "lifelines",
 
     # Time Series
-    "darts",
-    "neuralprophet"
+    "darts"
 )
 
 # Step 2: Install common packages - Smart approach
 Write-Host "Step 2: Installing common packages..." -ForegroundColor Yellow
 Write-Host "Packages: $($commonPackages.Count) packages to install" -ForegroundColor Gray
+Write-Host ""
+Write-Host "[INFO] Using 'uv pip install' so setup is not blocked by project-wide lock resolution." -ForegroundColor Gray
 Write-Host ""
 
 $successPackages = @()
@@ -487,7 +541,7 @@ $robotLauncherDir = $null
 Write-Host "[Strategy 1] Attempting bulk installation..." -ForegroundColor Cyan
 Write-Host ""
 
-& uv add @commonPackages
+& uv pip install @commonPackages
 $bulkExitCode = $LASTEXITCODE
 
 if ($bulkExitCode -eq 0) {
@@ -504,17 +558,9 @@ if ($bulkExitCode -eq 0) {
     foreach ($package in $commonPackages) {
         $currentNum = [array]::IndexOf($commonPackages, $package) + 1
         Write-Host "[$currentNum/$($commonPackages.Count)] Testing $package..." -ForegroundColor Gray
-        
-        # Check if already installed from bulk attempt
-        $checkOutput = uv pip list 2>&1 | Out-String
-        if ($checkOutput -match $package) {
-            Write-Host "  ✓ $package (already installed)" -ForegroundColor Green
-            $successPackages += $package
-            continue
-        }
-        
+
         # Try installing this package
-        & uv add $package
+        & uv pip install $package
         $exitCode = $LASTEXITCODE
         
         if ($exitCode -eq 0) {
@@ -557,7 +603,7 @@ if ($failedPackages.Count -gt 0) {
     Write-Host "  📐 Statistics: factor_analyzer, pingouin, prince, optuna" -ForegroundColor Gray
     Write-Host "  🔍 Explainability: shap" -ForegroundColor Gray
     Write-Host "  📦 Core ML: scikit-learn, numpy, pandas, joblib" -ForegroundColor Gray
-    Write-Host "  ⏱️  Time Series: darts, neuralprophet" -ForegroundColor Gray
+    Write-Host "  ⏱️  Time Series: darts" -ForegroundColor Gray
     Write-Host "  🔄 Online ML: vowpalwabbit" -ForegroundColor Gray
     Write-Host "  🏥 Survival: lifelines" -ForegroundColor Gray
 }
@@ -566,8 +612,8 @@ Write-Host ""
 
 # Step 2b: Install CLI/TUI packages separately
 # IMPORTANT: Use `uv pip install` instead of `uv sync --extra tui`
-# because the full project resolver can fail on unrelated packages
-# such as neuralprophet, while textual itself installs fine.
+# because the full project resolver can fail on unrelated dependencies,
+# while textual itself installs fine.
 Write-Host "Step 2b: Installing CLI/TUI packages..." -ForegroundColor Yellow
 Write-Host "" 
 Write-Host "Installing: rich, textual>=0.86.0" -ForegroundColor Gray
@@ -579,11 +625,11 @@ $cliTuiExitCode = Invoke-LoggedNativeCommand -Command {
 if ($cliTuiExitCode -eq 0) {
     $cliTuiInstalled = $true
     Write-Host "✅ CLI/TUI packages installed successfully" -ForegroundColor Green
-    Write-Host "   `robot` can use Textual TUI directly." -ForegroundColor Green
+    Write-Host "   robot can use Textual TUI directly." -ForegroundColor Green
 } else {
     Write-Host "⚠️  CLI/TUI package installation failed" -ForegroundColor Yellow
-    Write-Host "   `robot` will continue to work in console mode." -ForegroundColor Yellow
-    Write-Host "   Manual fallback: uv pip install `"textual>=0.86.0`"" -ForegroundColor Gray
+    Write-Host "   robot will continue to work in console mode." -ForegroundColor Yellow
+    Write-Host '   Manual fallback: uv pip install "textual>=0.86.0"' -ForegroundColor Gray
 }
 
 Write-Host ""
@@ -602,8 +648,8 @@ switch ($gpuType) {
         Write-Host "  Index URL: $indexUrl" -ForegroundColor Gray
         Write-Host ""
 
-        # CRITICAL: Use pip install with explicit index to avoid CPU fallback
-        # uv add may resolve to CPU version from PyPI if dependency conflicts occur
+        # CRITICAL: Use pip install with explicit index to avoid CPU fallback.
+        # Project-level resolution may otherwise fall back to CPU wheels from PyPI.
         Write-Host "  Force installing GPU wheels (avoiding CPU fallback)..." -ForegroundColor Gray
         & uv pip install torch torchvision torchaudio --index-url $indexUrl --force-reinstall --no-deps
         $installExitCode = $LASTEXITCODE
@@ -666,8 +712,8 @@ switch ($gpuType) {
             Write-Host "  ❌ CRITICAL: Could not install PyTorch with CUDA support" -ForegroundColor Red
             Write-Host "  Installing CPU version as last resort..." -ForegroundColor Yellow
             $gpuType = "cpu"
-            & uv pip install torch torchvision torchaudio --no-deps
-            if ($LASTEXITCODE -eq 0) { $installSuccess = $true }
+            $cpuFallbackExitCode = Install-CpuPyTorch -ForceReinstall
+            if ($cpuFallbackExitCode -eq 0) { $installSuccess = $true }
         }
     }
     "amd" {
@@ -692,8 +738,8 @@ switch ($gpuType) {
             if (-not $installSuccess) {
                 Write-Host "  Falling back to CPU version..." -ForegroundColor Yellow
                 $gpuType = "cpu"
-                & uv pip install torch torchvision torchaudio --no-deps
-                if ($LASTEXITCODE -eq 0) { $installSuccess = $true }
+                $cpuFallbackExitCode = Install-CpuPyTorch -ForceReinstall
+                if ($cpuFallbackExitCode -eq 0) { $installSuccess = $true }
             }
         } else {
             # Native Windows - ROCm has limited support
@@ -737,8 +783,8 @@ switch ($gpuType) {
             if (-not $installSuccess) {
                 Write-Host "  Falling back to CPU version..." -ForegroundColor Yellow
                 $gpuType = "cpu"
-                & uv pip install torch torchvision torchaudio --no-deps
-                if ($LASTEXITCODE -eq 0) { $installSuccess = $true }
+                $cpuFallbackExitCode = Install-CpuPyTorch -ForceReinstall
+                if ($cpuFallbackExitCode -eq 0) { $installSuccess = $true }
             }
         }
     }
@@ -759,14 +805,13 @@ switch ($gpuType) {
         # Step 1: Install base PyTorch (CPU) first - required for IPEX
         $baseTorchInstalled = $false
         Write-Host "  Step 1: Installing base PyTorch..." -ForegroundColor Gray
-        & uv pip install torch torchvision torchaudio --no-deps
-        $baseExitCode = $LASTEXITCODE
+        $baseExitCode = Install-CpuPyTorch -ForceReinstall
 
         if ($baseExitCode -ne 0) {
             Write-Host "  ❌ Failed to install base PyTorch" -ForegroundColor Red
             Write-Host "  Trying alternative install method..." -ForegroundColor Yellow
-            & uv add torch torchvision torchaudio
-            if ($LASTEXITCODE -ne 0) {
+            $retryExitCode = Install-CpuPyTorch
+            if ($retryExitCode -ne 0) {
                 Write-Host "  ❌ All installation attempts failed" -ForegroundColor Red
                 return
             }
@@ -792,7 +837,7 @@ switch ($gpuType) {
         } else {
             # Step 2: Install Intel Extension for PyTorch (IPEX) for XPU support
             Write-Host "  Step 2: Installing Intel Extension for PyTorch (IPEX)..." -ForegroundColor Gray
-            & uv add intel-extension-for-pytorch
+            & uv pip install intel-extension-for-pytorch
             $ipexExitCode = $LASTEXITCODE
 
             if ($ipexExitCode -eq 0) {
@@ -841,8 +886,8 @@ except ImportError:
     }
     "cpu" {
         Write-Host "Installing PyTorch CPU version..." -ForegroundColor Cyan
-        & uv add torch torchvision torchaudio
-        if ($LASTEXITCODE -eq 0) { $installSuccess = $true }
+        $cpuInstallExitCode = Install-CpuPyTorch -ForceReinstall
+        if ($cpuInstallExitCode -eq 0) { $installSuccess = $true }
     }
 }
 
@@ -854,9 +899,9 @@ if (-not $installSuccess) {
     Write-Host ""
 
     Write-Host "Installing PyTorch CPU version as last resort..." -ForegroundColor Yellow
-    & uv pip install torch torchvision torchaudio
+    $finalCpuExitCode = Install-CpuPyTorch -ForceReinstall
 
-    if ($LASTEXITCODE -ne 0) {
+    if ($finalCpuExitCode -ne 0) {
         Write-Host ""
         Write-Host "❌ CRITICAL: Even CPU installation failed!" -ForegroundColor Red
         Write-Host "  Please check:" -ForegroundColor Red
@@ -902,8 +947,9 @@ if ($rustAvailable -and (Test-Path $rustEnginePath)) {
 
     # Build and install rust_engine
     Write-Host "[2/3] Building rust_engine (release mode)..." -ForegroundColor Cyan
+    $maturinPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
     Push-Location $rustEnginePath
-    $rustExitCode = Invoke-LoggedNativeCommand -Command { uv run maturin develop --release }
+    $rustExitCode = Invoke-LoggedNativeCommand -Command { & $maturinPython -m maturin develop --release }
     Pop-Location
 
     if ($rustExitCode -eq 0) {
@@ -943,11 +989,16 @@ Write-Host ""
 # Step 5: Run verification
 Write-Host "Step 5: Running GPU & Rust engine verification..." -ForegroundColor Yellow
 Write-Host ""
+$verificationFailed = $false
 
 # Use venv python explicitly to ensure we test the installed packages
 $venvPython = ".venv\Scripts\python.exe"
 if (Test-Path $venvPython) {
     & $venvPython verify_gpu.py
+    if ($LASTEXITCODE -ne 0) {
+        $verificationFailed = $true
+        Write-Host "[WARN] PyTorch verification reported an error. See the output above." -ForegroundColor Yellow
+    }
 
     # Test rust_engine
     Write-Host ""
@@ -965,6 +1016,10 @@ except ImportError as e:
 } else {
     Write-Host "[WARN] .venv python not found, using system python..." -ForegroundColor Yellow
     python verify_gpu.py
+    if ($LASTEXITCODE -ne 0) {
+        $verificationFailed = $true
+        Write-Host "[WARN] PyTorch verification reported an error. See the output above." -ForegroundColor Yellow
+    }
 }
 
 Write-Host ""
@@ -975,7 +1030,11 @@ Write-Host "  GPU Type: $($gpuType.ToUpper())" -ForegroundColor Cyan
 Write-Host "  Rust Engine: $(if (Test-Path (Join-Path $PSScriptRoot 'rust_engine')) { 'Configured' } else { 'Not found' })" -ForegroundColor Cyan
 Write-Host "  CLI/TUI: $(if ($cliTuiInstalled) { 'Textual ready' } else { 'Console mode only' })" -ForegroundColor Cyan
 Write-Host "  Robot Launcher: $(if ($robotLauncherInstalled) { "Installed at $robotLauncherDir" } else { 'Repo-local only' })" -ForegroundColor Cyan
-Write-Host "  Status: Success" -ForegroundColor Green
+if ($verificationFailed) {
+    Write-Host "  Status: Completed with verification warnings" -ForegroundColor Yellow
+} else {
+    Write-Host "  Status: Success" -ForegroundColor Green
+}
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -1004,10 +1063,10 @@ Write-Host ""
 Write-Host "Start your analysis with:" -ForegroundColor Cyan
 Write-Host "  robot" -ForegroundColor Gray
 Write-Host "  robot-tui" -ForegroundColor Gray
-Write-Host "  uv run python main.py --models" -ForegroundColor Gray
+Write-Host "  .venv\\Scripts\\python.exe main.py --models" -ForegroundColor Gray
 if ($robotLauncherInstalled) {
     Write-Host ""
-    Write-Host "If this is a brand-new terminal session, `robot` should work immediately." -ForegroundColor Gray
+    Write-Host "If this is a brand-new terminal session, robot should work immediately." -ForegroundColor Gray
     Write-Host "If another terminal was already open before setup, open a new one to refresh PATH." -ForegroundColor Gray
 }
 Write-Host ""

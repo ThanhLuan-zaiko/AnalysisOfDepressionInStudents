@@ -29,7 +29,8 @@ dependencies = [
     "lifelines>=0.30.3",
     # Time Series
     "darts>=0.43.0",
-    "neuralprophet>=0.5.0",
+    # NeuralProphet stable releases are currently incompatible with
+    # Python 3.14 + NumPy 2.x + Plotly 6.x + Torch 2.x.
     # Online Learning
     "vowpalwabbit>=9.11.2",
     "catboost>=1.2.10",

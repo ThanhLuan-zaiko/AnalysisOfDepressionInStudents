@@ -24,6 +24,7 @@ Thumbs.db
 
 # uv cache (NOT uv.lock - that should be committed!)
 .cache/
+.uv-cache/
 
 # Jupyter
 .ipynb_checkpoints/
