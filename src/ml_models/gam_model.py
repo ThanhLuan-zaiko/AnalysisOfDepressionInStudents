@@ -494,6 +494,12 @@ class GAMClassifier:
             "features": [],
             "feature_importance_ranking": self.results.get("feature_importance", []),
         }
+        importance_by_feature = {
+            row.get("feature"): row
+            for row in self.results.get("feature_importance", [])
+            if isinstance(row, dict)
+        }
+        is_rust_engine = self.results.get("_engine") == "rust"
         
         # Information cho từng feature
         for i, feat_name in enumerate(self.feature_names):
@@ -502,12 +508,24 @@ class GAMClassifier:
                 "term_index": i,
                 "type": self.feature_types.get(feat_name, "unknown"),
             }
+            if feat_name in importance_by_feature:
+                feat_info["variance_importance"] = importance_by_feature[feat_name].get("variance_importance")
+
+            if is_rust_engine:
+                feat_info["effect_range"] = None
+                feat_info["effect_direction"] = "not_available_for_rust_engine"
+                feat_info["note"] = (
+                    "Rust GAM hiện cung cấp feature importance nhưng không cung cấp "
+                    "generate_X_grid/partial dependence API kiểu pyGAM."
+                )
+                interpretation["features"].append(feat_info)
+                continue
             
             # Compute effect direction và magnitude
             try:
                 XX = self.model.generate_X_grid(term=i)
-                pd_dict = self.model.partial_dependence(term=i, X=XX)
-                pd_vals = pd_dict['partial_dependence'].flatten()
+                raw_pd = self.model.partial_dependence(term=i, X=XX)
+                _, pd_vals, _ = self._normalize_partial_dependence(raw_pd, XX, i)
                 
                 feat_info["effect_range"] = {
                     "min": float(pd_vals.min()),

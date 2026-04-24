@@ -13,8 +13,9 @@ def run_modern_pipeline_cli(
     export_html: bool = False,
     console_only: bool = False,
     output_dir: str = "results/app",
+    training_budget_mode: str = "default",
 ) -> None:
-    from src.app import ArtifactPolicy, RunPreset, RunProfile
+    from src.app import ArtifactPolicy, RunConfig, RunPreset, RunProfile
     from src.app import compare_profiles, load_dataset as load_dataset_v2
     from src.app import profile_dataset as profile_dataset_v2
     from src.app import run_pipeline as run_pipeline_v2
@@ -49,6 +50,7 @@ def run_modern_pipeline_cli(
             preset=RunPreset(preset),
             artifact_policy=artifact_policy,
             output_dir=output_dir,
+            training_budget_mode=training_budget_mode,
         )
         print("\nSafe vs Full comparison:")
         for model_name, summary in comparison.summary.items():
@@ -70,6 +72,7 @@ def run_modern_pipeline_cli(
         preset=RunPreset(preset),
         artifact_policy=artifact_policy,
         output_dir=output_dir,
+        config=RunConfig(training_budget_mode=training_budget_mode),
     )
     print(f"\nRun config: profile={report.config['profile']} preset={report.config['preset']}")
     print(f"   models: {', '.join(report.config['models'])}")
@@ -139,6 +142,8 @@ def build_main_parser(default_dataset: str) -> argparse.ArgumentParser:
                         help="Modern pipeline: do not write JSON/HTML artifacts")
     parser.add_argument("--output-dir", type=str, default="results/app",
                         help="Modern pipeline artifact directory")
+    parser.add_argument("--budget", choices=("default", "auto"), default="default",
+                        help="Training budget resolver mode")
     parser.add_argument("--dataset", type=str, default=default_dataset, help="Path to dataset CSV")
     return parser
 
@@ -168,6 +173,7 @@ def dispatch_main_cli(
                 export_html=args.export_html,
                 console_only=args.console_only,
                 output_dir=args.output_dir,
+                training_budget_mode=args.budget,
             )
         elif args.full:
             legacy_main(
@@ -184,6 +190,7 @@ def dispatch_main_cli(
                 run_fairness=args.analysis,
                 run_subgroups=args.analysis,
                 run_robustness=args.analysis,
+                training_budget_mode=args.budget,
             )
         elif any_flag:
             legacy_main(
@@ -202,6 +209,7 @@ def dispatch_main_cli(
                 run_subgroups=args.subgroups or args.analysis,
                 run_robustness=args.robustness or args.analysis,
                 run_report=args.report,
+                training_budget_mode=args.budget,
             )
         else:
             legacy_main(

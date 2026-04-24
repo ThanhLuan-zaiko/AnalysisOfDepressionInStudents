@@ -12,6 +12,7 @@ import pandas as pd
 import polars as pl
 from sklearn.calibration import calibration_curve
 from sklearn.compose import ColumnTransformer
+from sklearn.dummy import DummyClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
@@ -576,6 +577,11 @@ class DepressionAnalysisService:
         warnings = list(profile_report.warnings)
         rust_status = _rust_engine_status() if "gam" in model_names or cfg.preset is RunPreset.RESEARCH else None
 
+        if "dummy" in model_names:
+            start = time.perf_counter()
+            model_results["dummy"] = self._run_dummy(y_train, y_test, holdout_df, cfg)
+            timings["dummy_seconds"] = round(time.perf_counter() - start, 4)
+
         if "logistic" in model_names:
             start = time.perf_counter()
             model_results["logistic"] = self._run_logistic(X_train, X_test, y_train, y_test, holdout_df, cfg)
@@ -660,6 +666,7 @@ class DepressionAnalysisService:
         preset: RunPreset = RunPreset.QUICK,
         artifact_policy: ArtifactPolicy = ArtifactPolicy.JSON,
         output_dir: str | Path = "results/app",
+        training_budget_mode: str = "default",
     ) -> ComparisonReport:
         split = self.make_split(bundle.frame, random_state=42, test_size=0.2)
         safe_report = self.run_pipeline(
@@ -669,6 +676,7 @@ class DepressionAnalysisService:
             artifact_policy=artifact_policy,
             output_dir=output_dir,
             split=split,
+            config=RunConfig(training_budget_mode=training_budget_mode),
         )
         full_report = self.run_pipeline(
             bundle=bundle,
@@ -677,6 +685,7 @@ class DepressionAnalysisService:
             artifact_policy=artifact_policy,
             output_dir=output_dir,
             split=split,
+            config=RunConfig(training_budget_mode=training_budget_mode),
         )
 
         summary: dict[str, Any] = {}
@@ -716,10 +725,10 @@ class DepressionAnalysisService:
 
     def _default_models(self, preset: RunPreset) -> list[str]:
         if preset is RunPreset.RESEARCH:
-            return ["logistic", "gam", "catboost"]
+            return ["dummy", "logistic", "gam", "catboost"]
         if preset is RunPreset.QUICK:
-            return ["logistic", "catboost"]
-        return ["logistic"]
+            return ["dummy", "logistic", "catboost"]
+        return ["dummy", "logistic"]
 
     def _metric_delta(self, newer: float | None, older: float | None) -> float | None:
         if newer is None or older is None:
@@ -762,6 +771,44 @@ class DepressionAnalysisService:
             warnings.append(f"Co category hiem can can nhac gop nhom: {', '.join(rare_categories[:4])}.")
 
         return warnings
+
+    def _run_dummy(
+        self,
+        y_train: np.ndarray,
+        y_test: np.ndarray,
+        holdout_df: pl.DataFrame,
+        cfg: RunConfig,
+    ) -> ModelResult:
+        model = DummyClassifier(strategy="prior", random_state=cfg.random_state)
+        model.fit(np.zeros((len(y_train), 1)), y_train)
+
+        train_prior = float(model.class_prior_[list(model.classes_).index(1)]) if 1 in model.classes_ else 0.0
+        oof_scores = np.full(len(y_train), train_prior, dtype=float)
+        holdout_scores = np.full(len(y_test), train_prior, dtype=float)
+        oof_pred = (oof_scores >= 0.5).astype(int)
+        holdout_pred = (holdout_scores >= 0.5).astype(int)
+
+        thresholds = _compute_threshold_report(y_test, holdout_scores)
+        fairness = _compute_subgroup_metrics(
+            holdout_df,
+            y_test,
+            holdout_scores,
+            thresholds["best_f1"]["threshold"],
+        )
+
+        return ModelResult(
+            name="dummy",
+            oof=_compute_binary_metrics(y_train, oof_scores, oof_pred),
+            holdout=_compute_binary_metrics(y_test, holdout_scores, holdout_pred),
+            thresholds=thresholds,
+            fairness=fairness,
+            feature_importance=[],
+            metadata={
+                "strategy": "prior",
+                "class_prior_positive": round(train_prior, 6),
+                "evaluation": "constant_prior_baseline",
+            },
+        )
 
     def _run_logistic(
         self,
@@ -1118,5 +1165,6 @@ def compare_profiles(
     preset: RunPreset = RunPreset.QUICK,
     artifact_policy: ArtifactPolicy = ArtifactPolicy.JSON,
     output_dir: str | Path = "results/app",
+    training_budget_mode: str = "default",
 ) -> ComparisonReport:
-    return _SERVICE.compare_profiles(bundle, preset, artifact_policy, output_dir)
+    return _SERVICE.compare_profiles(bundle, preset, artifact_policy, output_dir, training_budget_mode)

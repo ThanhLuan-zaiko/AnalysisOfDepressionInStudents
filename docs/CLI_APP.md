@@ -4,20 +4,12 @@
 
 `robot` là lệnh chung để:
 
-- mở TUI theo phong cách terminal monitor
-- chạy workflow modern và legacy trong cùng một hub
-- xem lại artifact cũ mà không cần chạy lại
-- mở HTML report/dashboard trên trình duyệt mặc định
+- Mở TUI theo phong cách terminal monitor.
+- Chạy workflow modern và legacy trong cùng một hub.
+- Xem lại artifact cũ mà không cần chạy lại.
+- Mở HTML report/dashboard trên trình duyệt mặc định.
 
 Nếu máy đã có `textual`, `robot` sẽ mở TUI. Nếu chưa có, lệnh sẽ rơi về console fallback.
-
-## Quy ước cấu hình
-
-- `A = safe = conservative`
-- `B = full = default`
-- `budget = default | auto`
-
-`budget=auto` sẽ tự chỉnh ngân sách train cho các model đang được workflow đó dùng.
 
 ## Khởi động nhanh
 
@@ -32,6 +24,33 @@ Sau đó mở PowerShell mới rồi chạy:
 ```powershell
 robot
 ```
+
+## TUI Hacker Pro
+
+TUI mới dùng layout 3 vùng để giảm cảm giác bị ngợp khi kết quả dài:
+
+| Vùng | Vai trò |
+|---|---|
+| Control deck | Chọn dataset, workflow, variant, preset, budget, HTML/JSON/log artifact |
+| Workspace | Xem status, command palette, output stack, JSON dump, console trace |
+| Intel rail | Xem nhanh session, best model, FAMD clustering, artifact inventory, workflow map |
+
+Intel rail đọc trực tiếp các artifact trong `results/`:
+
+- `best_model_selection.json`: model được chọn, profile, metric và lý do.
+- `model_comparison_report.json`: ranking Dummy, Logistic Regression, GAM, CatBoost.
+- `visualizations/famd_clustering_results.json`: K-Means/DBSCAN trên tọa độ FAMD.
+- `visualizations/famd_summary.json`: variance/cumulative variance của các component FAMD.
+
+Nhờ vậy bạn có thể giữ workspace cho log/report chi tiết, còn rail bên phải dùng để xem model nào mạnh/yếu và FAMD clustering đang nói gì.
+
+## Quy ước cấu hình
+
+- `A = safe = conservative`
+- `B = full = default`
+- `budget = default | auto`
+
+`budget=auto` tự chỉnh ngân sách train cho các model mà workflow đang dùng.
 
 ## Các lệnh chính
 
@@ -65,10 +84,10 @@ Chạy workflow bất kỳ trong hub:
 
 ```powershell
 robot task eda --dataset Student_Depression_Dataset.csv
-robot task fairness --dataset Student_Depression_Dataset.csv --variant A --budget auto
-robot task robustness --dataset Student_Depression_Dataset.csv --variant B --budget auto
-robot task analysis --dataset Student_Depression_Dataset.csv --variant A --budget auto
+robot task famd --dataset Student_Depression_Dataset.csv
+robot task models --dataset Student_Depression_Dataset.csv --variant A --budget auto
 robot task report --dataset Student_Depression_Dataset.csv
+robot task analysis --dataset Student_Depression_Dataset.csv --variant A --budget auto
 ```
 
 Mở HTML:
@@ -87,57 +106,45 @@ robot history results\app\run_safe_quick.json
 
 ## Artifact review trong TUI
 
-TUI hiện có 3 lane review artifact:
+TUI có 3 lane review artifact:
 
-- `html picker`: chọn file `.html` rồi mở bằng phím `3`
-- `history json`: nạp lại artifact `.json`
-- `console log`: nạp lại `.log` đã lưu
+- `html picker`: chọn file `.html` rồi mở bằng phím `3`.
+- `history json`: nạp lại artifact `.json` bằng phím `4`.
+- `console log`: nạp lại `.log` đã lưu bằng phím `6`.
 
-Mỗi lần chạy workflow, app sẽ lưu console log vào:
+Mỗi lần chạy workflow, app lưu console log vào:
 
 ```text
 results/app/console_logs/
 ```
 
-Khi nạp console log bằng phím `6`, output stack sẽ hiển thị:
+Khi nạp console log bằng phím `6`, workspace hiển thị:
 
 - `CONSOLE TRACE`
 - `OVERALL ASSESSMENT`
 - `FLAG BENCHMARK`
 
-Hai panel đánh giá này không chỉ dành cho `--eda`. Chúng sẽ tự chọn cách diễn giải theo workflow, gồm:
-
-- `profile`
-- `run`
-- `compare`
-- `eda`
-- `models`
-- `full`
-- `fairness`
-- `subgroups`
-- `robustness`
-- `analysis`
-- `review`
-- `stats`
-- `split`
-- `famd`
-- `standardize`
-- `report`
-
 Nếu workflow chưa có parser chuyên biệt, app vẫn tạo đánh giá tổng quát bằng tiếng Việt từ log và artifact.
 
 ## Hotkeys quan trọng trong TUI
 
-- `1`: chạy workflow đang chọn
-- `2`: mở HTML mới nhất
-- `3`: mở HTML đang chọn trong picker
-- `4`: load JSON history
-- `5`: bật/tắt forensic JSON dump
-- `6`: load console log đã lưu
-- `F5`: refresh danh sách HTML / JSON / LOG
-- `r`: chạy lại workflow gần nhất
-- `:`: mở command palette
-- `q`: thoát
+| Phím | Chức năng |
+|---|---|
+| `1` | Chạy workflow đang chọn |
+| `2` | Mở HTML mới nhất |
+| `3` | Mở HTML đang chọn trong picker |
+| `4` | Load JSON history |
+| `5` | Bật/tắt forensic JSON dump |
+| `6` | Load console log đã lưu |
+| `F5` | Refresh danh sách HTML / JSON / LOG |
+| `r` | Chạy lại workflow gần nhất |
+| `:` | Mở command palette |
+| `q` | Thoát |
+
+Điều hướng:
+
+- Dùng con lăn để cuộn vùng đang trỏ vào.
+- Dùng `PgUp`, `PgDn`, `Home`, `End` để cuộn đồng bộ control deck, workspace và intel rail.
 
 ## Command palette
 
@@ -170,22 +177,22 @@ Nhấn `:` rồi gõ một trong các lệnh sau:
 
 ## Gợi ý thao tác
 
-Luồng an toàn khi kiểm tra nhanh:
+Luồng kiểm tra nhanh:
 
 1. `robot`
-2. chọn `workflow=profile`
-3. bấm `1`
-4. chuyển sang `run`, `variant=A`, `preset=quick`
-5. bấm `1`
-6. bấm `6` nếu muốn xem lại log cũ có benchmark
+2. Chọn `workflow=profile`
+3. Bấm `1`
+4. Chuyển sang `run`, `variant=A`, `preset=quick`
+5. Bấm `1`
+6. Nhìn `BEST MODEL` và `ARTIFACTS` ở intel rail
+7. Bấm `2` hoặc `3` để mở HTML report liên quan
 
-Luồng nghiên cứu leakage:
+Luồng nghiên cứu FAMD và model evidence:
 
-1. chạy `profile`
-2. chạy `compare`
-3. mở `eda` hoặc `analysis`
-4. dùng `3` để mở HTML đang chọn
-5. dùng `4` hoặc `6` để xem lại artifact cũ mà không rerun
+1. Chạy `famd` để tạo component HTML, K-Means và DBSCAN report.
+2. Chạy `models` hoặc `report` để tạo model comparison và best model selection.
+3. Dùng intel rail để kiểm tra nhanh `FAMD CLUSTER` và `BEST MODEL`.
+4. Mở `results/final_report.html`, `results/model_evidence_metrics.html` hoặc `results/visualizations/famd_clustering_report.html` để đọc đầy đủ.
 
 ## Xử lý sự cố nhanh
 
@@ -197,15 +204,15 @@ uv pip install "textual>=0.86.0"
 
 Phím `3` không mở HTML:
 
-- kiểm tra `html picker` có file đang chọn hay chưa
-- bấm `F5` để refresh danh sách
-- bấm `3` lại, app sẽ fallback sang file HTML mới nhất nếu picker đang trống
+- Kiểm tra `html picker` có file đang chọn hay chưa.
+- Bấm `F5` để refresh danh sách.
+- Bấm `3` lại, app sẽ fallback sang file HTML mới nhất nếu picker đang trống.
 
 Muốn chỉ xem lại kết quả cũ:
 
-- dùng `4` cho JSON history
-- dùng `6` cho console log
-- dùng `3` hoặc `2` để mở HTML liên quan
+- Dùng `4` cho JSON history.
+- Dùng `6` cho console log.
+- Dùng `3` hoặc `2` để mở HTML liên quan.
 
 ## Tài liệu liên quan
 

@@ -4,7 +4,8 @@
 
 ## Tài Liệu Nhanh
 
-- CLI App: [docs/CLI_APP.md](docs/CLI_APP.md)
+- CLI App và TUI Hacker Pro: [docs/CLI_APP.md](docs/CLI_APP.md)
+- Phím tắt TUI: [docs/TUI_HOTKEYS.md](docs/TUI_HOTKEYS.md)
 - Tổng quan tài liệu: [docs/README.md](docs/README.md)
 - Review và quyền cho `docs/`: [docs/GITHUB_DOCS_QUYEN.md](docs/GITHUB_DOCS_QUYEN.md)
 
@@ -615,7 +616,7 @@ uv run python main.py --famd
 | Giai đoạn | Nội dung | Output |
 |-----------|----------|--------|
 | **0** | Cảnh báo đạo đức | In console |
-| **FAMD** | Giảm chiều dữ liệu hỗn hợp (numeric + categorical) | 5 biểu đồ HTML + console |
+| **FAMD** | Giảm chiều dữ liệu hỗn hợp (numeric + categorical) + clustering | HTML cho từng cặp component liền kề + K-Means/DBSCAN report |
 
 **Không chạy:** EDA, stats, models, leakage
 
@@ -623,7 +624,9 @@ uv run python main.py --famd
 
 **Kết quả bao gồm:**
 - **Scree plot** — phương sai giải thích bởi mỗi thành phần
-- **Correlation circle** — biến numeric nào tương quan với PC nào
+- **Contribution plots** — top biến đóng góp cho từng component F1..F10
+- **Correlation circle / sample projection** — các cặp F1-F2, F2-F3, ..., F9-F10
+- **Clustering** — K-Means + DBSCAN trên tọa độ FAMD, giải thích cụm bằng tiếng Việt
 - **Sample projection** — phân bố mẫu trên mặt phẳng PC, tô màu trầm cảm
 - **Top contributing variables** — biến nào đóng góp nhiều nhất vào mỗi PC
 - **Bảng eigenvalues** — eigenvalue, variance %, cumulative %
@@ -788,7 +791,8 @@ uv run python main.py --report
 | Nội dung | Mô tả |
 |----------|-------|
 | **Executive Summary** | Key findings ở 1 trang — mô hình tốt nhất, fairness issues, robustness grade |
-| **Model Performance** | Bảng so sánh 4 mô hình + McNemar's test + DeLong's test |
+| **Model Performance** | Bảng so sánh Dummy, Logistic Regression, GAM, CatBoost trên Safe A / Full B |
+| **Model Evidence** | Biểu đồ metric, feature importance, calibration/Brier, confusion matrix, lý do model yếu/mạnh |
 | **Fairness Analysis** | Disparate Impact, Equalized Odds warnings cho từng model |
 | **Subgroup Analysis** | Performance breakdown + Error analysis + Threshold recommendations |
 | **Robustness Analysis** | Bootstrap CI, CV Stability, Noise robustness, Feature ablation |
@@ -800,6 +804,8 @@ uv run python main.py --report
 **File sinh ra:**
 - `results/final_report.md` — Markdown report (dễ đọc, dễ chia sẻ)
 - `results/final_report.html` — HTML report (có styling, dễ xem trên browser)
+- `results/best_model_selection.json` — model được chọn, profile, metric và lý do
+- `results/model_evidence_metrics.html`, `results/model_feature_importance_safe.html` — biểu đồ bằng chứng
 
 **⏱️ Thời gian:** ~2 giây (sau khi đã có kết quả analysis).
 
@@ -857,7 +863,7 @@ uv run python main.py --analysis --report            # Chạy analysis + tạo r
 | `--review` | — | Biến hằng số, missing values, rare categories, cảnh báo |
 | `--standardize` | — | Rename cột, chuẩn hóa giá trị, phân loại biến, feature estimate |
 | `--stats` | — | Thống kê mô tả, Mann-Whitney U (Cohen d), Chi-square (Cramer V, OR), Spearman |
-| `--famd` | 5 HTML | Eigenvalues, top biến đóng góp theo PC, phương sai tích lũy |
+| `--famd` | 20+ HTML + JSON/CSV | Eigenvalues, top biến đóng góp từng component, FAMD adjacent pairs, K-Means/DBSCAN clustering |
 | `--split` | 1 JSON (`split_report.json`) | Kích thước train/test, phân phối target, KS test |
 | `--leakage` | 1 JSON (`leakage_investigation.json`) | Odds Ratio, Stress Test, Cross-Tab, Synthetic Check |
 | `--models` | 1 JSON + **10+ HTML** + 2 JSON | 4 mô hình, Fairness, Threshold, **GAM plots**, **Model comparison charts** |

@@ -400,11 +400,17 @@ def _run_modern_workflow(request: WorkflowRequest) -> WorkflowResult:
         )
 
     if request.workflow_id == "compare":
+        artifact_policy = (
+            ArtifactPolicy.CONSOLE_ONLY
+            if request.console_only
+            else (ArtifactPolicy.FULL_EXPORT if request.export_html else ArtifactPolicy.JSON)
+        )
         report = compare_profiles(
             bundle=bundle,
             preset=preset,
-            artifact_policy=ArtifactPolicy.CONSOLE_ONLY if request.console_only else ArtifactPolicy.JSON,
+            artifact_policy=artifact_policy,
             output_dir=request.output_dir,
+            training_budget_mode=budget_mode,
         )
         return WorkflowResult(
             workflow_id=request.workflow_id,

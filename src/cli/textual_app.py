@@ -189,6 +189,8 @@ def launch_tui(default_dataset: Path) -> None:
                         yield Input(placeholder=": command", id="cmdline")
                         with VerticalScroll(id="output_scroll"):
                             yield Static(id="output")
+                    with VerticalScroll(id="intel_scroll"):
+                        yield Static(id="intel_panel")
                 yield Footer()
 
         def on_mount(self) -> None:
@@ -202,6 +204,7 @@ def launch_tui(default_dataset: Path) -> None:
             self._last_logs: list[str] = []
             self._last_action = "idle"
             self._show_json_dump = False
+            self._json_cache: dict[str, tuple[float, dict[str, Any]]] = {}
             self._boot_lines = [
                 "[00] cold start",
                 "[01] probing terminal capabilities",
@@ -215,10 +218,10 @@ def launch_tui(default_dataset: Path) -> None:
             ]
             self._boot_index = 1
             self._apply_theme()
-            self._render_static_panels()
             self._refresh_html_options()
             self._refresh_history_options()
             self._refresh_log_options()
+            self._render_static_panels()
             self._set_output(self._build_boot_log(self._boot_index))
             self.set_interval(0.55, self._refresh_dashboard)
             self._boot_timer = self.set_interval(0.16, self._advance_boot)
@@ -235,16 +238,16 @@ def launch_tui(default_dataset: Path) -> None:
             root.styles.background = palette["screen_bg"]
 
             hero = self.query_one("#hero", Static)
-            hero.styles.height = 14
+            hero.styles.height = 12
             hero.styles.margin = (0, 0, 1, 0)
 
             layout = self.query_one("#layout", Horizontal)
             layout.styles.height = "1fr"
 
             sidebar_scroll = self.query_one("#sidebar_scroll", VerticalScroll)
-            sidebar_scroll.styles.width = 46
-            sidebar_scroll.styles.min_width = 42
-            sidebar_scroll.styles.max_width = 50
+            sidebar_scroll.styles.width = 39
+            sidebar_scroll.styles.min_width = 32
+            sidebar_scroll.styles.max_width = 42
             sidebar_scroll.styles.height = "1fr"
             sidebar_scroll.styles.margin = (0, 1, 0, 0)
             sidebar_scroll.styles.border = ("round", palette["sidebar_border"])
@@ -305,6 +308,11 @@ def launch_tui(default_dataset: Path) -> None:
                 button.styles.color = fg
                 button.styles.text_style = "bold"
 
+            workspace = self.query_one("#workspace", Vertical)
+            workspace.styles.width = "1fr"
+            workspace.styles.min_width = 50
+            workspace.styles.height = "1fr"
+
             status_bar = self.query_one("#status_bar", Static)
             status_bar.styles.height = 3
             status_bar.styles.margin = (0, 0, 1, 0)
@@ -323,6 +331,21 @@ def launch_tui(default_dataset: Path) -> None:
             output_scroll.styles.background = palette["output_bg"]
             output_scroll.styles.padding = (0, 1)
             output_scroll.show_vertical_scrollbar = True
+
+            intel_scroll = self.query_one("#intel_scroll", VerticalScroll)
+            intel_scroll.styles.width = 38
+            intel_scroll.styles.min_width = 28
+            intel_scroll.styles.max_width = 44
+            intel_scroll.styles.height = "1fr"
+            intel_scroll.styles.margin = (0, 0, 0, 1)
+            intel_scroll.styles.border = ("round", palette["artifact_border"])
+            intel_scroll.styles.background = palette["sidebar_bg"]
+            intel_scroll.styles.padding = (0, 1)
+            intel_scroll.show_vertical_scrollbar = True
+
+            intel_panel = self.query_one("#intel_panel", Static)
+            intel_panel.styles.width = "100%"
+            intel_panel.styles.height = "auto"
 
             footer = self.query_one(Footer)
             footer.styles.background = palette["footer_bg"]
@@ -351,7 +374,7 @@ def launch_tui(default_dataset: Path) -> None:
             self.query_one("#root", Vertical).styles.background = palette["screen_bg"]
 
             hero = self.query_one("#hero", Static)
-            hero.styles.height = 18 if self._danger_workflow() else 14
+            hero.styles.height = 13 if self._danger_workflow() else 12
 
             sidebar_scroll = self.query_one("#sidebar_scroll", VerticalScroll)
             sidebar_scroll.styles.border = ("round", palette["sidebar_border"])
@@ -386,6 +409,11 @@ def launch_tui(default_dataset: Path) -> None:
             output_scroll.styles.border = ("round", palette["output_border"])
             output_scroll.styles.background = palette["output_bg"]
             output_scroll.show_vertical_scrollbar = True
+
+            intel_scroll = self.query_one("#intel_scroll", VerticalScroll)
+            intel_scroll.styles.border = ("round", palette["artifact_border"])
+            intel_scroll.styles.background = palette["sidebar_bg"]
+            intel_scroll.show_vertical_scrollbar = True
 
             footer = self.query_one(Footer)
             footer.styles.background = palette["footer_bg"]
@@ -425,6 +453,7 @@ def launch_tui(default_dataset: Path) -> None:
             self._apply_dynamic_palette()
             self.query_one("#hero", Static).update(self._build_hero())
             self.query_one("#status_bar", Static).update(self._build_status_panel())
+            self.query_one("#intel_panel", Static).update(self._build_intel_panel())
 
         def _advance_boot(self) -> None:
             if self._last_action != "idle":
@@ -555,74 +584,131 @@ def launch_tui(default_dataset: Path) -> None:
         def _set_output(self, renderable: Any) -> None:
             self.query_one("#output", Static).update(renderable)
 
+        def _build_robot_logo(self) -> Text:
+            palette = self._palette()
+            width = getattr(self.size, "width", 140)
+            if width < 92:
+                logo = Text()
+                logo.append("  ROBOT  ", style=f"bold {palette['screen_bg']} on {palette['hero_title']}")
+                logo.append("  workflow command core", style=f"bold {palette['accent_soft']}")
+                return logo
+
+            return Text(
+                "\n".join(
+                    [
+                        "  _______    ______    _______    ______   _________ ",
+                        " |  ___  \\  /  __  \\  |  ___  \\  /  __  \\ |___   ___|",
+                        " | |   | | |  |  |  | | |   | | |  |  |  |    | |    ",
+                        " | |___| | |  |  |  | | |___| | |  |  |  |    | |    ",
+                        " |  __  /  |  |  |  | |  __  /  |  |  |  |    | |    ",
+                        " | |  \\ \\  |  |__|  | | |___| | |  |__|  |    | |    ",
+                        " |_|   \\_\\  \\______/  |_______/  \\______/     |_|    ",
+                    ]
+                ),
+                style=f"bold {palette['banner']}",
+            )
+
+        def _build_robot_stage(self) -> Any:
+            width = getattr(self.size, "width", 140)
+            if width < 118:
+                return self._build_robot_logo()
+
+            grid = Table.grid(expand=True)
+            grid.add_column(width=58)
+            grid.add_column(ratio=1)
+            grid.add_row(self._build_robot_logo(), self._build_robot_sidecar())
+            return grid
+
+        def _build_robot_sidecar(self) -> Text:
+            palette = self._palette()
+            selection = self._read_json_cached(Path("results") / "best_model_selection.json")
+            clustering = self._read_json_cached(Path("results") / "visualizations" / "famd_clustering_results.json")
+            kmeans = clustering.get("kmeans", {}) if isinstance(clustering.get("kmeans"), dict) else {}
+            dbscan = clustering.get("dbscan", {}) if isinstance(clustering.get("dbscan"), dict) else {}
+
+            model = str(selection.get("model", "pending")).upper()
+            auc = self._format_signal(selection.get("roc_auc"), 10)
+            f1 = self._format_signal(selection.get("f1"), 10)
+            kmeans_line = f"k={kmeans.get('best_k', 'n/a')} sil={self._format_signal(kmeans.get('silhouette'), 8)}"
+            dbscan_line = (
+                f"{dbscan.get('n_clusters', 'n/a')} clusters"
+                if dbscan.get("found_valid_clusters")
+                else "density pending"
+            )
+
+            text = Text()
+            text.append("  +-- MISSION TELEMETRY", style=f"bold {palette['hero_title']}")
+            text.append(" " + "-" * 28 + "\n", style=palette["grid"])
+            text.append("  | CORE      ", style=f"bold {palette['meta_label']}")
+            text.append("workflow command matrix\n", style=f"bold {palette['accent_soft']}")
+            text.append("  | MODEL     ", style=f"bold {palette['meta_label']}")
+            text.append(f"{model}  auc={auc}  f1={f1}\n", style=f"bold {palette['meta_value']}")
+            text.append("  | FAMD      ", style=f"bold {palette['meta_label']}")
+            text.append(f"KMeans {kmeans_line}  DBSCAN {dbscan_line}\n", style=f"bold {palette['meta_value']}")
+            text.append("  | ARTIFACT  ", style=f"bold {palette['meta_label']}")
+            text.append(
+                f"html={len(self._last_html)}  json={len(self._last_json)}  log={len(self._last_logs)}\n",
+                style=f"bold {palette['meta_value']}",
+            )
+            text.append("  | HOT PATH  ", style=f"bold {palette['meta_label']}")
+            text.append("1 run  4 history  6 log  F5 refresh\n", style=f"bold {palette['hotkeys']}")
+            text.append("  +", style=palette["grid"])
+            text.append("-" * 49, style=palette["grid"])
+            return text
+
         def _build_hero(self) -> Panel:
             palette = self._palette()
             spec = self._selected_spec()
             pulse = "|/-\\"[self._tick % 4] if self._status_state == "running" else ">"
             clock = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-            banner = Text(
-                "\n".join(
-                    [
-                        "  ________  ___  __       ___    ________      ___    ________   ________  ___    ___ _________  ___  ________  ________     ",
-                        " |\\   ____\\|\\  \\|\\  \\    |\\  \\  |\\   ___  \\   |\\  \\  |\\   ___  \\|\\   __  \\|\\  \\  /  /|\\___   ___\\\\  \\|\\   ____\\|\\   ____\\    ",
-                        " \\ \\  \\___|\\ \\  \\/  /|_  \\ \\  \\ \\ \\  \\\\ \\  \\  \\ \\  \\ \\ \\  \\\\ \\  \\ \\  \\|\\  \\ \\  \\/  / ||___ \\  \\_\\ \\  \\ \\  \\___|\\ \\  \\___|    ",
-                        "  \\ \\_____  \\ \\   ___  \\  \\ \\  \\ \\ \\  \\\\ \\  \\  \\ \\  \\ \\ \\  \\\\ \\  \\ \\   __  \\ \\    / /     \\ \\  \\ \\ \\  \\ \\  \\    \\ \\_____  \\   ",
-                        "   \\|____|\\  \\ \\  \\\\ \\  \\  \\ \\  \\ \\ \\  \\\\ \\  \\  \\ \\  \\ \\ \\  \\\\ \\  \\ \\  \\ \\  \\/  /  /       \\ \\  \\ \\ \\  \\ \\  \\____\\|____|\\  \\  ",
-                        "     ____\\_\\  \\ \\__\\\\ \\__\\  \\ \\__\\ \\ \\__\\\\ \\__\\  \\ \\__\\ \\ \\__\\\\ \\__\\ \\__\\ \\__/  / /          \\ \\__\\ \\ \\__\\ \\_______\\____\\_\\  \\ ",
-                        "    |\\_________\\|__| \\|__|   \\|__|  \\|__| \\|__|   \\|__|  \\|__| \\|__|\\|__|\\|__|/ /            \\|__|  \\|__|\\|_______|\\_________\\",
-                        "    \\|_________|                                                                     \\/                                     \\|_________|",
-                    ]
-                ),
-                style=f"bold {palette['banner']}",
-            )
+            banner = Text()
+            banner.append("SEN ANALYTICS", style=f"bold {palette['banner']}")
+            banner.append("  //  ", style=f"bold {palette['separator']}")
+            banner.append("HACKER PRO OPS GRID", style=f"bold {palette['hero_title']}")
+            banner.append("  //  ", style=f"bold {palette['separator']}")
+            banner.append("multi-pane telemetry", style=f"bold {palette['hotkeys']}")
+
+            robot_mark = Text()
+            robot_mark.append(" < workflow command core >", style=f"bold {palette['accent_soft']}")
+            robot_mark.append("  ::  ", style=f"bold {palette['separator']}")
+            robot_mark.append("model | famd | report | artifact", style=f"bold {palette['meta_value']}")
 
             telemetry = Text()
             telemetry.append(f" {pulse} ", style=f"bold #0A141B on {palette['accent_soft']}")
             telemetry.append("clock ", style=f"bold {palette['meta_label']}")
             telemetry.append(clock, style=f"bold {palette['meta_value']}")
-            telemetry.append("  ||  ", style=f"bold {palette['separator']}")
+            telemetry.append(" | ", style=f"bold {palette['separator']}")
             telemetry.append("dataset ", style=f"bold {palette['meta_label']}")
             telemetry.append(self._dataset_short(), style=f"bold {palette['meta_value']}")
-            telemetry.append("  ||  ", style=f"bold {palette['separator']}")
+            telemetry.append(" | ", style=f"bold {palette['separator']}")
             telemetry.append("workflow ", style=f"bold {palette['meta_label']}")
             telemetry.append(spec.workflow_id, style=f"bold {palette['hero_title']}")
-            telemetry.append("  ||  ", style=f"bold {palette['separator']}")
+            telemetry.append(" | ", style=f"bold {palette['separator']}")
             telemetry.append("family ", style=f"bold {palette['meta_label']}")
             telemetry.append(spec.family, style=f"bold {palette['accent_soft']}")
-            telemetry.append("  ||  ", style=f"bold {palette['separator']}")
+            telemetry.append(" | ", style=f"bold {palette['separator']}")
             telemetry.append("last ", style=f"bold {palette['meta_label']}")
             telemetry.append(self._last_action, style=f"bold {palette['meta_value']}")
 
             hotkeys = Text(
-                " hotkeys :: [1] run workflow  [2] latest html  [3] open selected html  [4] load history  [5] json dump  [6] console log  [F5] refresh lists  [r] rerun  [:] command  [q] quit ",
+                " [1] run  [2] latest html  [3] selected html  [4] history  "
+                "[5] json  [6] log  [F5] refresh  [r] rerun  [:] command  [q] quit ",
                 style=f"bold {palette['hotkeys']}",
             )
 
-            renderables: list[Any] = [Text(self._noise_line(118, 3), style=palette["noise"])]
+            renderables: list[Any] = [
+                Text(self._noise_line(118, 3), style=palette["noise"]),
+                Align.left(banner),
+                Align.left(self._build_robot_stage()),
+                Align.left(robot_mark),
+            ]
             if self._danger_workflow():
-                skull = Text(
-                    "\n".join(
-                        [
-                            "            .ed\"\"\"\" \"\"\"$$$$be.",
-                            "          -\"           ^\"\"**$$$e.",
-                            "        .\"                   '$$$c",
-                            "       /                      \"4$$b",
-                            "      d  3                      $$$$",
-                            "      $  *                   .$$$$$$",
-                            "     .$  ^c           $$$$$e$$$$$$$$.",
-                            "     d$L  4.         4$$$$$$$$$$$$$$b",
-                        ]
-                    ),
-                    style=f"bold {palette['skull']}",
-                )
-                renderables.append(Align.left(skull))
-                renderables.append(Text(self._radar_sweep(118, 3), style=palette["accent"]))
+                alert = Text("attention mode: audit workflow selected", style=f"bold {palette['skull']}")
+                renderables.append(Align.left(alert))
 
             renderables.extend(
                 [
-                    Align.left(banner),
-                    Text(""),
                     Align.left(telemetry),
                     Align.left(hotkeys),
                     Text(self._noise_line(118, 6), style=palette["noise"]),
@@ -631,7 +717,10 @@ def launch_tui(default_dataset: Path) -> None:
 
             return Panel(
                 Group(*renderables),
-                title=f"[bold {palette['hero_title']}]{'THREAT MONITOR' if self._danger_workflow() else 'TERMINAL MONITOR'}[/]",
+                title=(
+                    f"[bold {palette['hero_title']}]"
+                    f"{'AUDIT MONITOR' if self._danger_workflow() else 'TERMINAL MONITOR'}[/]"
+                ),
                 border_style=palette["hero_border"],
                 box=box.DOUBLE,
             )
@@ -683,8 +772,212 @@ def launch_tui(default_dataset: Path) -> None:
             text.append("auto budget  ", style="bold #67D5FF")
             text.append("maps train budget to max_iter / iterations / n_splines\n", style="#87B7C8")
             text.append("PgUp / PgDn  ", style=f"bold {palette['hero_title']}")
-            text.append("scroll sidebar and telemetry stack", style="#87B7C8")
+            text.append("scroll control, output and intel lanes", style="#87B7C8")
             return Panel(text, title="[bold]NOTES[/]", border_style=palette["sidebar_border"], box=box.HEAVY)
+
+        def _build_intel_panel(self) -> Group:
+            palette = self._palette()
+            header = Text()
+            header.append("HACKER PRO RAIL\n", style=f"bold {palette['hero_title']}")
+            header.append("live snapshot without rerun", style=palette["hotkeys"])
+
+            return Group(
+                Panel(
+                    Group(
+                        Text(self._grid_line(36, 1), style=palette["grid"]),
+                        header,
+                        Text(self._radar_sweep(36, 2), style=palette["accent"]),
+                    ),
+                    title="[bold]INTEL[/]",
+                    border_style=palette["hero_border"],
+                    box=box.DOUBLE,
+                ),
+                Text(""),
+                self._compact_frame("SESSION", self._session_rows(), palette["signal_border"]),
+                Text(""),
+                self._compact_frame("BEST MODEL", self._best_model_rows(), palette["accent"]),
+                Text(""),
+                self._compact_frame("FAMD CLUSTER", self._famd_rows(), palette["delta_border"]),
+                Text(""),
+                self._compact_frame("ARTIFACTS", self._artifact_inventory_rows(), palette["artifact_border"]),
+                Text(""),
+                self._compact_frame("WORKFLOW MAP", self._workflow_rows(), palette["output_border"]),
+                Text(""),
+                self._compact_frame("FAST PATH", self._operator_rows(), palette["hero_title"]),
+            )
+
+        def _compact_frame(self, title: str, rows: list[tuple[str, str]], border: str) -> Panel:
+            palette = self._palette()
+            table = Table(box=box.SIMPLE, show_header=False, expand=True, pad_edge=False)
+            table.add_column("key", style=f"bold {palette['meta_label']}", width=11, no_wrap=True)
+            table.add_column("value", style=palette["meta_value"], ratio=1)
+            for key, value in rows:
+                table.add_row(key, value)
+            return Panel(table, title=f"[bold]{title}[/]", border_style=border, box=box.ROUNDED)
+
+        def _read_json_cached(self, path: Path) -> dict[str, Any]:
+            key = str(path)
+            try:
+                stat = path.stat()
+            except OSError:
+                self._json_cache.pop(key, None)
+                return {}
+
+            cached = self._json_cache.get(key)
+            if cached is not None and cached[0] == stat.st_mtime:
+                return cached[1]
+
+            try:
+                parsed = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                parsed = {"_error": str(exc)}
+
+            data = parsed if isinstance(parsed, dict) else {"_value": parsed}
+            self._json_cache[key] = (stat.st_mtime, data)
+            return data
+
+        def _format_pct(self, value: Any) -> str:
+            if value is None:
+                return "n/a"
+            try:
+                return f"{float(value) * 100:.1f}%"
+            except (TypeError, ValueError):
+                return "n/a"
+
+        def _session_rows(self) -> list[tuple[str, str]]:
+            request = self._last_request
+            result = self._last_result
+            rows = [
+                ("state", self._status_state),
+                ("workflow", self._workflow_id()),
+                ("variant", str(self.query_one("#variant", Select).value or "A")),
+                ("preset", str(self.query_one("#preset", Select).value or "quick")),
+                ("budget", str(self.query_one("#budget", Select).value or "default")),
+                ("last", self._format_signal(self._last_action, 28)),
+            ]
+            if request is not None:
+                rows.append(("queued", f"{request.workflow_id}/{request.variant}/{request.preset}"))
+            if result is not None:
+                rows.append(("loaded", f"{result.workflow_id} ({result.family})"))
+                rows.append(("html_out", str(len(result.html_artifacts))))
+                rows.append(("json_out", str(len(self._json_artifact_paths(result)))))
+            return rows
+
+        def _best_model_rows(self) -> list[tuple[str, str]]:
+            selection = self._read_json_cached(Path("results") / "best_model_selection.json")
+            comparison = self._read_json_cached(Path("results") / "model_comparison_report.json")
+            if not selection:
+                return [("status", "run report/models first")]
+
+            rows = [
+                ("model", str(selection.get("model", "n/a")).upper()),
+                ("profile", self._format_signal(selection.get("profile"), 24)),
+                ("roc_auc", self._format_signal(selection.get("roc_auc"), 12)),
+                ("pr_auc", self._format_signal(selection.get("pr_auc"), 12)),
+                ("f1", self._format_signal(selection.get("f1"), 12)),
+                ("brier", self._format_signal(selection.get("brier_score"), 12)),
+            ]
+
+            ranking = comparison.get("ranking")
+            if isinstance(ranking, list) and ranking:
+                top = ranking[0] if isinstance(ranking[0], dict) else {}
+                runner_up = ranking[1] if len(ranking) > 1 and isinstance(ranking[1], dict) else {}
+                if runner_up:
+                    try:
+                        gap = float(top.get("roc_auc", 0.0)) - float(runner_up.get("roc_auc", 0.0))
+                        rows.append(("auc_gap", f"{gap:+.4f} vs {runner_up.get('model')}"))
+                    except (TypeError, ValueError):
+                        rows.append(("runner_up", self._format_signal(runner_up.get("model"), 20)))
+                dummy = next(
+                    (item for item in ranking if isinstance(item, dict) and item.get("model") == "dummy"),
+                    None,
+                )
+                if isinstance(dummy, dict):
+                    try:
+                        lift = float(top.get("roc_auc", 0.0)) - float(dummy.get("roc_auc", 0.0))
+                        rows.append(("vs_dummy", f"{lift:+.4f} ROC-AUC"))
+                    except (TypeError, ValueError):
+                        pass
+
+            reason = selection.get("reason")
+            if reason:
+                rows.append(("why", self._format_signal(reason, 38)))
+            return rows
+
+        def _famd_rows(self) -> list[tuple[str, str]]:
+            clustering = self._read_json_cached(Path("results") / "visualizations" / "famd_clustering_results.json")
+            summary = self._read_json_cached(Path("results") / "visualizations" / "famd_summary.json")
+            if not clustering:
+                return [("status", "run FAMD first")]
+
+            kmeans = clustering.get("kmeans", {}) if isinstance(clustering.get("kmeans"), dict) else {}
+            dbscan = clustering.get("dbscan", {}) if isinstance(clustering.get("dbscan"), dict) else {}
+            rows = [
+                ("samples", self._format_signal(clustering.get("n_samples"), 12)),
+                ("dims", self._format_signal(clustering.get("n_dims"), 12)),
+                ("kmeans", f"k={kmeans.get('best_k', 'n/a')} sil={self._format_signal(kmeans.get('silhouette'), 8)}"),
+            ]
+            if dbscan.get("found_valid_clusters"):
+                rows.append(
+                    (
+                        "dbscan",
+                        f"{dbscan.get('n_clusters', 'n/a')} clusters, "
+                        f"noise={self._format_pct(dbscan.get('noise_fraction'))}",
+                    )
+                )
+            else:
+                rows.append(("dbscan", "no stable density clusters"))
+
+            explained = summary.get("explained_variance_ratio")
+            cumulative = summary.get("cumulative_variance")
+            if isinstance(explained, list) and explained:
+                rows.append(("F1_var", self._format_pct(explained[0])))
+            if isinstance(cumulative, list) and len(cumulative) >= 3:
+                rows.append(("F1-F3", self._format_pct(cumulative[2])))
+            return rows
+
+        def _artifact_inventory_rows(self) -> list[tuple[str, str]]:
+            rows = [
+                ("html", f"{len(self._last_html)} indexed"),
+                ("json", f"{len(self._last_json)} indexed"),
+                ("logs", f"{len(self._last_logs)} indexed"),
+            ]
+            if self._last_html:
+                rows.append(("latest_h", self._format_signal(Path(self._last_html[0]).name, 30)))
+            if self._last_json:
+                rows.append(("latest_j", self._format_signal(Path(self._last_json[0]).name, 30)))
+            if self._last_logs:
+                rows.append(("latest_l", self._format_signal(Path(self._last_logs[0]).name, 30)))
+            return rows
+
+        def _workflow_rows(self) -> list[tuple[str, str]]:
+            spec = self._selected_spec()
+            export_html = self.query_one("#export_html", Checkbox).value
+            if export_html and spec.supports_export_html:
+                html_state = "on"
+            elif spec.supports_export_html:
+                html_state = "available"
+            else:
+                html_state = "n/a"
+            rows = [
+                ("label", self._format_signal(spec.label, 30)),
+                ("family", spec.family),
+                ("desc", self._format_signal(spec.description, 38)),
+                ("variant", "enabled" if spec.supports_variant else "fixed"),
+                ("budget", "enabled" if spec.supports_budget else "fixed"),
+                ("html", html_state),
+            ]
+            return rows
+
+        def _operator_rows(self) -> list[tuple[str, str]]:
+            return [
+                ("run", "1 / :run"),
+                ("review", "4 JSON, 6 LOG"),
+                ("html", "2 latest, 3 selected"),
+                ("refresh", "F5 artifact lists"),
+                ("scroll", "wheel, PgUp/PgDn"),
+                ("command", ":set workflow report"),
+            ]
 
         def _build_idle_output(self) -> Group:
             palette = self._palette()
@@ -700,7 +993,7 @@ def launch_tui(default_dataset: Path) -> None:
             text.append("> press r to rerun previous workflow\n", style=palette["delta_border"])
             text.append("> press : to open command palette\n", style="#E0B8FF")
             text.append("> press F5 to refresh html/json/log artifact lists\n", style=palette["hotkeys"])
-            text.append("> use PgUp / PgDn to scroll long control stacks and output modules\n", style=palette["hotkeys"])
+            text.append("> use PgUp / PgDn to scroll control, output and intel lanes together\n", style=palette["hotkeys"])
             return self._wrap_with_scanlines(
                 Panel(
                     Group(
@@ -750,15 +1043,7 @@ def launch_tui(default_dataset: Path) -> None:
             if skull:
                 renderables.append(
                     Text(
-                        "\n".join(
-                            [
-                                "  .-.",
-                                " (o o)",
-                                " | O \\",
-                                "  \\   \\",
-                                "   `~~~'",
-                            ]
-                        ),
+                        "!! attention mode :: review leakage, subgroup and robustness signals",
                         style=f"bold {palette['skull']}",
                     )
                 )
@@ -1540,33 +1825,38 @@ def launch_tui(default_dataset: Path) -> None:
             self._set_status("error", f"unknown command: {command}")
 
         def on_select_changed(self, event: Select.Changed) -> None:
-            if event.select.id != "workflow":
+            if event.select.id not in {"workflow", "variant", "preset", "budget"}:
                 return
             self._render_static_panels()
-            if self._last_result is not None and self._last_action != "idle":
+            if event.select.id == "workflow" and self._last_result is not None and self._last_action != "idle":
                 self._set_output(self._build_result_output(self._last_result))
-            else:
+            elif event.select.id == "workflow":
                 self._set_output(self._build_idle_output())
 
         def on_key(self, event: events.Key) -> None:
             sidebar_scroll = self.query_one("#sidebar_scroll", VerticalScroll)
             output_scroll = self.query_one("#output_scroll", VerticalScroll)
+            intel_scroll = self.query_one("#intel_scroll", VerticalScroll)
 
             if event.key == "pageup":
                 sidebar_scroll.scroll_page_up(animate=False)
                 output_scroll.scroll_page_up(animate=False)
+                intel_scroll.scroll_page_up(animate=False)
                 event.stop()
             elif event.key == "pagedown":
                 sidebar_scroll.scroll_page_down(animate=False)
                 output_scroll.scroll_page_down(animate=False)
+                intel_scroll.scroll_page_down(animate=False)
                 event.stop()
             elif event.key == "home":
                 sidebar_scroll.scroll_home(animate=False)
                 output_scroll.scroll_home(animate=False)
+                intel_scroll.scroll_home(animate=False)
                 event.stop()
             elif event.key == "end":
                 sidebar_scroll.scroll_end(animate=False)
                 output_scroll.scroll_end(animate=False)
+                intel_scroll.scroll_end(animate=False)
                 event.stop()
 
         @work(thread=True, exclusive=True)

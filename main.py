@@ -720,6 +720,14 @@ def run_famd_analysis(df: pl.DataFrame):
     for name, path in saved.items():
         print(f"     ✅ {name}: {path}")
 
+    print("\n  📊 Phân cụm trên tọa độ FAMD (K-Means + DBSCAN)...")
+    clustering_saved = analyzer.save_clustering_outputs(
+        output_dir="results/visualizations/",
+        target_col="Depression",
+    )
+    for name, path in clustering_saved.items():
+        print(f"     ✅ {name}: {path}")
+
 
 def run_leakage_investigation(df: pl.DataFrame):
     """Điều tra rò rỉ nhãn từ Suicidal thoughts."""
@@ -786,13 +794,12 @@ def run_report_generation():
     print(f"     ✅ Saved: {html_path}")
 
     print("\n  📋 Báo cáo bao gồm:")
-    print("     • Executive summary — key findings")
-    print("     • Model performance — so sánh 4 mô hình")
-    print("     • Fairness analysis — bias detection")
-    print("     • Subgroup analysis — performance breakdown")
-    print("     • Robustness analysis — stability tests")
-    print("     • Recommendations — actionable insights")
-    print(f"\n  📁 File: results/final_report.md, results/final_report.html")
+    print("     • Safe A / Full B model comparison nếu có artifact modern compare")
+    print("     • Dummy, Logistic Regression, GAM, CatBoost evidence")
+    print("     • Feature importance, calibration/Brier, confusion matrix, threshold")
+    print("     • FAMD clustering summary nếu đã chạy --famd")
+    print("     • Best model selection JSON")
+    print(f"\n  📁 File: results/final_report.md, results/final_report.html, results/best_model_selection.json")
 
 
 def run_advanced_analysis(
@@ -1051,7 +1058,16 @@ def run_ml_pipeline(
         print("     (Hiệu năng cao nhất, nhưng OR = 12.388 cho Suicidal thoughts)")
     print("=" * 80)
 
-    modeler = DepressionRiskModeler(training_budget_mode=training_budget_mode)
+    resolved_budget = resolve_training_budget(
+        mode=training_budget_mode,
+        family="legacy",
+        preset="research",
+        train_rows=df.height,
+    )
+    modeler = DepressionRiskModeler(
+        training_budget_mode=training_budget_mode,
+        training_budget=resolved_budget,
+    )
     results = modeler.run_full_pipeline(
         df,
         include_suicidal=include_suicidal,
@@ -1206,9 +1222,10 @@ def run_modern_pipeline_cli(
     profile: str = "safe",
     compare: bool = False,
     export_html: bool = False,
+    training_budget_mode: str = "default",
 ):
     """Bridge to the new holdout-first pipeline while keeping main.py compatible."""
-    from src.app import ArtifactPolicy, RunPreset, RunProfile
+    from src.app import ArtifactPolicy, RunConfig, RunPreset, RunProfile
     from src.app import compare_profiles, load_dataset as load_dataset_v2
     from src.app import profile_dataset as profile_dataset_v2
     from src.app import run_pipeline as run_pipeline_v2
@@ -1241,6 +1258,7 @@ def run_modern_pipeline_cli(
             preset=RunPreset(preset),
             artifact_policy=artifact_policy,
             output_dir="results/app",
+            training_budget_mode=training_budget_mode,
         )
         print("\nSafe vs Full comparison:")
         for model_name, summary in comparison.summary.items():
@@ -1262,6 +1280,7 @@ def run_modern_pipeline_cli(
         preset=RunPreset(preset),
         artifact_policy=artifact_policy,
         output_dir="results/app",
+        config=RunConfig(training_budget_mode=training_budget_mode),
     )
     print(f"\nRun config: profile={report.config['profile']} preset={report.config['preset']}")
     print(f"   models: {', '.join(report.config['models'])}")
