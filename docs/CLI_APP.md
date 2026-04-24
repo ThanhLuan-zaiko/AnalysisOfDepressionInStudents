@@ -2,27 +2,24 @@
 
 ## Mục tiêu
 
-`robot` là lệnh ngắn để mở ứng dụng phân tích trong repo này. Nếu máy đã có `textual`, `robot` sẽ mở TUI. Nếu chưa có, `robot` sẽ tự chuyển sang menu console.
+`robot` là lệnh chung để:
 
-Người mới nên bắt đầu từ `robot` thay vì gọi trực tiếp `main.py`.
+- mở TUI theo phong cách terminal monitor
+- chạy workflow modern và legacy trong cùng một hub
+- xem lại artifact cũ mà không cần chạy lại
+- mở HTML report/dashboard trên trình duyệt mặc định
 
-Nếu bạn chỉ cần nhớ thao tác bàn phím trong giao diện, xem thêm [TUI_HOTKEYS.md](./TUI_HOTKEYS.md).
+Nếu máy đã có `textual`, `robot` sẽ mở TUI. Nếu chưa có, lệnh sẽ rơi về console fallback.
 
-## Workflow Hub mới
-
-`robot` giờ dùng cùng một workflow hub cho cả TUI lẫn fallback console:
-
-- hỗ trợ cả nhánh modern và legacy trong `README.md`
-- hiển thị cấu hình `A/B`
-- hỗ trợ `training budget = default|auto`
-- có HTML picker để mở report/dashboard trên browser mặc định
-
-Quy đổi nhanh:
+## Quy ước cấu hình
 
 - `A = safe = conservative`
 - `B = full = default`
+- `budget = default | auto`
 
-## Cài nhanh
+`budget=auto` sẽ tự chỉnh ngân sách train cho các model đang được workflow đó dùng.
+
+## Khởi động nhanh
 
 Trong thư mục repo:
 
@@ -30,137 +27,121 @@ Trong thư mục repo:
 .\setup_with_gpu.ps1
 ```
 
-Script này hiện đã:
-
-- tạo `.venv`
-- cài dependency chính
-- cài `rich` và `textual`
-- tạo launcher `robot` và `robot-tui`
-- thêm thư mục launcher vào `PATH` người dùng nếu cần
-
-Sau khi setup xong, mở một cửa sổ PowerShell mới rồi chạy:
+Sau đó mở PowerShell mới rồi chạy:
 
 ```powershell
 robot
 ```
 
-## Dataset mặc định
+## Các lệnh chính
 
-Nếu không truyền `--dataset`, app sẽ dùng:
-
-```text
-Student_Depression_Dataset.csv
-```
-
-Bạn vẫn có thể chỉ định file khác bằng `--dataset`.
-
-## Chạy từng chức năng
-
-### 1. Mở ứng dụng
+Mở TUI:
 
 ```powershell
 robot
+robot-tui
 ```
 
-Ứng dụng sẽ mở TUI nếu `textual` đã có. Trong TUI:
-
-- `1`: chạy hồ sơ dữ liệu
-- `2`: chạy pipeline theo profile và preset đang chọn
-- `3`: so sánh `safe` và `full`
-- `r`: chạy lại tác vụ hiện tại
-- `:`: mở command palette
-- `q`: thoát
-
-### 2. Hồ sơ dữ liệu
-
-```powershell
-robot profile --dataset Student_Depression_Dataset.csv
-```
-
-Chức năng này dùng để:
-
-- xem số dòng, số cột
-- xem tỷ lệ nhãn `Depression`
-- xem cột nào được chọn cho `safe` và `full`
-- hiện cảnh báo leakage, missing value, rare category
-
-Nếu chỉ muốn in ra terminal, không ghi file:
+Profile dataset:
 
 ```powershell
 robot profile --dataset Student_Depression_Dataset.csv --console-only
 ```
 
-Nếu muốn xuất HTML EDA:
+Chạy pipeline modern:
 
 ```powershell
-robot profile --dataset Student_Depression_Dataset.csv --full-export --export-html
+robot run --dataset Student_Depression_Dataset.csv --variant A --preset quick --budget auto
+robot run --dataset Student_Depression_Dataset.csv --variant B --preset research
 ```
 
-### 3. Chạy nhanh an toàn
-
-```powershell
-robot run --dataset Student_Depression_Dataset.csv --profile safe --preset quick --console-only
-```
-
-Đây là lệnh nên dùng đầu tiên khi muốn đánh giá mô hình mà hạn chế leakage.
-
-`safe` bỏ biến:
-
-```text
-Have you ever had suicidal thoughts ?
-```
-
-### 4. Chạy nhanh đầy đủ
-
-```powershell
-robot run --dataset Student_Depression_Dataset.csv --profile full --preset quick --console-only
-```
-
-`full` giữ biến nhạy cảm để bạn nhìn thấy mức tăng accuracy và rủi ro leakage.
-
-### 5. Chạy nghiên cứu
-
-```powershell
-robot run --dataset Student_Depression_Dataset.csv --profile safe --preset research --console-only
-```
-
-Preset `research` sẽ sâu hơn `quick`:
-
-- thêm GAM
-- hiện metadata nghiên cứu nhiều hơn
-- ưu tiên Rust engine nếu điều kiện phù hợp
-- fallback về `pyGAM` nếu Rust không sẵn sàng
-
-### 6. So sánh `safe` và `full`
+So sánh A/B:
 
 ```powershell
 robot compare --dataset Student_Depression_Dataset.csv --preset quick --console-only
 ```
 
-Chức năng này chạy cùng một split cho hai profile để bạn xem:
-
-- `roc_auc`
-- `f1`
-- `recall`
-- độ lệch giữa `full` và `safe`
-
-### 7. Mở thẳng TUI
+Chạy workflow bất kỳ trong hub:
 
 ```powershell
-robot-tui
+robot task eda --dataset Student_Depression_Dataset.csv
+robot task fairness --dataset Student_Depression_Dataset.csv --variant A --budget auto
+robot task robustness --dataset Student_Depression_Dataset.csv --variant B --budget auto
+robot task analysis --dataset Student_Depression_Dataset.csv --variant A --budget auto
+robot task report --dataset Student_Depression_Dataset.csv
 ```
 
-Hoặc:
+Mở HTML:
 
 ```powershell
-robot
+robot open-html --latest
+robot open-html results\final_report.html
 ```
 
-Nếu `textual` đã được cài.
+Xem lại JSON history:
 
-## Command Palette Trong TUI
+```powershell
+robot history --latest
+robot history results\app\run_safe_quick.json
+```
 
-Nhấn `:` rồi nhập một trong các lệnh sau:
+## Artifact review trong TUI
+
+TUI hiện có 3 lane review artifact:
+
+- `html picker`: chọn file `.html` rồi mở bằng phím `3`
+- `history json`: nạp lại artifact `.json`
+- `console log`: nạp lại `.log` đã lưu
+
+Mỗi lần chạy workflow, app sẽ lưu console log vào:
+
+```text
+results/app/console_logs/
+```
+
+Khi nạp console log bằng phím `6`, output stack sẽ hiển thị:
+
+- `CONSOLE TRACE`
+- `OVERALL ASSESSMENT`
+- `FLAG BENCHMARK`
+
+Hai panel đánh giá này không chỉ dành cho `--eda`. Chúng sẽ tự chọn cách diễn giải theo workflow, gồm:
+
+- `profile`
+- `run`
+- `compare`
+- `eda`
+- `models`
+- `full`
+- `fairness`
+- `subgroups`
+- `robustness`
+- `analysis`
+- `review`
+- `stats`
+- `split`
+- `famd`
+- `standardize`
+- `report`
+
+Nếu workflow chưa có parser chuyên biệt, app vẫn tạo đánh giá tổng quát bằng tiếng Việt từ log và artifact.
+
+## Hotkeys quan trọng trong TUI
+
+- `1`: chạy workflow đang chọn
+- `2`: mở HTML mới nhất
+- `3`: mở HTML đang chọn trong picker
+- `4`: load JSON history
+- `5`: bật/tắt forensic JSON dump
+- `6`: load console log đã lưu
+- `F5`: refresh danh sách HTML / JSON / LOG
+- `r`: chạy lại workflow gần nhất
+- `:`: mở command palette
+- `q`: thoát
+
+## Command palette
+
+Nhấn `:` rồi gõ một trong các lệnh sau:
 
 ```text
 :help
@@ -168,7 +149,14 @@ Nhấn `:` rồi nhập một trong các lệnh sau:
 :rerun
 :html latest
 :html open
-:refresh html
+:history latest
+:history load
+:log latest
+:log load
+:json toggle
+:json on
+:json off
+:refresh artifacts
 :set workflow profile
 :set workflow analysis
 :set variant A
@@ -180,102 +168,46 @@ Nhấn `:` rồi nhập một trong các lệnh sau:
 :set dataset Student_Depression_Dataset.csv
 ```
 
-## Ý nghĩa profile
+## Gợi ý thao tác
 
-### `safe`
+Luồng an toàn khi kiểm tra nhanh:
 
-- phù hợp đánh giá thực dụng
-- giảm nguy cơ leakage
-- nên dùng khi báo cáo hoặc demo chính
+1. `robot`
+2. chọn `workflow=profile`
+3. bấm `1`
+4. chuyển sang `run`, `variant=A`, `preset=quick`
+5. bấm `1`
+6. bấm `6` nếu muốn xem lại log cũ có benchmark
 
-### `full`
+Luồng nghiên cứu leakage:
 
-- dùng để so sánh nghiên cứu
-- giữ biến nhạy cảm
-- dễ có accuracy cao hơn nhưng rủi ro leakage lớn hơn
-
-## Ý nghĩa preset
-
-### `quick`
-
-- chạy nhanh hơn
-- phù hợp smoke test, demo, kiểm tra pipeline
-- thường gồm `logistic` và `catboost`
-
-### `research`
-
-- chạy sâu hơn
-- thêm `gam`
-- có thêm metadata phục vụ phân tích
-
-## Khi nào dùng `main.py`
-
-`main.py` vẫn còn để tương thích luồng cũ, nhưng với người mới thì nên ưu tiên:
-
-```powershell
-robot
-```
-
-Nếu cần kiểm tra đường legacy:
-
-```powershell
-.\.venv\Scripts\python.exe main.py --quick --profile safe --console-only
-```
-
-## Lệnh nên nhớ
-
-```powershell
-robot
-robot profile --dataset Student_Depression_Dataset.csv --console-only
-robot run --dataset Student_Depression_Dataset.csv --variant A --preset quick --budget auto
-robot run --dataset Student_Depression_Dataset.csv --variant B --preset quick
-robot compare --dataset Student_Depression_Dataset.csv --preset quick --console-only
-robot task analysis --dataset Student_Depression_Dataset.csv --variant A --budget auto
-robot open-html --latest
-robot-tui
-```
+1. chạy `profile`
+2. chạy `compare`
+3. mở `eda` hoặc `analysis`
+4. dùng `3` để mở HTML đang chọn
+5. dùng `4` hoặc `6` để xem lại artifact cũ mà không rerun
 
 ## Xử lý sự cố nhanh
 
-### `robot` không mở TUI
-
-Chạy lại setup:
-
-```powershell
-.\setup_with_gpu.ps1
-```
-
-Hoặc cài nhanh riêng `textual`:
+`robot` không mở TUI:
 
 ```powershell
 uv pip install "textual>=0.86.0"
 ```
 
-### Không ghi được file trong `results/` hoặc `logs/`
+Phím `3` không mở HTML:
 
-Dùng chế độ chỉ in terminal:
+- kiểm tra `html picker` có file đang chọn hay chưa
+- bấm `F5` để refresh danh sách
+- bấm `3` lại, app sẽ fallback sang file HTML mới nhất nếu picker đang trống
 
-```powershell
-robot run --profile safe --preset quick --console-only
-```
+Muốn chỉ xem lại kết quả cũ:
 
-### Muốn biết GAM có dùng Rust hay không
+- dùng `4` cho JSON history
+- dùng `6` cho console log
+- dùng `3` hoặc `2` để mở HTML liên quan
 
-Chạy:
+## Tài liệu liên quan
 
-```powershell
-robot run --dataset Student_Depression_Dataset.csv --profile safe --preset research --console-only
-```
-
-Sau đó xem phần metadata của model `gam`.
-
-## Gợi ý cho người mới
-
-Thứ tự đọc hợp lý:
-
-1. `docs/CLI_APP.md`
-2. `README.md`
-3. `src/cli/entrypoint.py`
-4. `src/cli/textual_app.py`
-5. `src/app/services.py`
-6. `src/entrypoints/main_dispatch.py`
+- [TUI_HOTKEYS.md](./TUI_HOTKEYS.md)
+- [README.md](./README.md)

@@ -25,10 +25,29 @@ import io
 
 from src.training_budget import resolve_training_budget
 
+def _configure_utf8_stream(stream):
+    """Keep Windows console UTF-8 without assuming the stream exposes .buffer."""
+    if hasattr(stream, "reconfigure"):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+            return stream
+        except (AttributeError, OSError, ValueError):
+            pass
+
+    buffer = getattr(stream, "buffer", None)
+    if buffer is None:
+        return stream
+
+    try:
+        return io.TextIOWrapper(buffer, encoding="utf-8", errors="replace")
+    except (AttributeError, OSError, ValueError):
+        return stream
+
+
 # Fix Windows console encoding
 if sys.platform == 'win32':
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    sys.stdout = _configure_utf8_stream(sys.stdout)
+    sys.stderr = _configure_utf8_stream(sys.stderr)
 
 # Setup logging
 from src.utils import setup_logging, Timer, print_device_info

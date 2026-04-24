@@ -14,24 +14,30 @@ from rich.table import Table
 from rich.text import Text
 
 from .workflows import (
+    analyze_console_log,
     WORKFLOW_SPECS,
     WorkflowRequest,
     WorkflowResult,
     describe_json_artifact,
+    describe_log_artifact,
     execute_workflow,
     latest_json_artifact,
+    latest_log_artifact,
     latest_html_artifact,
     list_workflow_specs,
+    load_console_log_result,
     load_history_result,
     open_html_artifact,
     scan_html_artifacts,
     scan_json_artifacts,
+    scan_log_artifacts,
 )
 
 
 def launch_tui(default_dataset: Path) -> None:
     from textual import events, work
     from textual.app import App, ComposeResult
+    from textual.binding import Binding
     from textual.containers import Horizontal, Vertical, VerticalScroll
     from textual.widgets import Button, Checkbox, Footer, Input, Select, Static
 
@@ -39,14 +45,16 @@ def launch_tui(default_dataset: Path) -> None:
         TITLE = "Sen Analytics"
         SUB_TITLE = "Monitor Mode"
         BINDINGS = [
-            ("1", "run_current", "Run"),
-            ("2", "open_latest", "Latest"),
-            ("3", "refresh_html", "Refresh"),
-            ("4", "load_history", "History"),
-            ("5", "toggle_json_dump", "JSON"),
-            (":", "toggle_command_palette", "Command"),
-            ("r", "rerun_current", "Rerun"),
-            ("q", "quit", "Quit"),
+            Binding("1", "run_current", "Run", priority=True),
+            Binding("2", "open_latest", "Latest", priority=True),
+            Binding("3", "open_selected_html", "Open HTML", priority=True),
+            Binding("4", "load_history", "History", priority=True),
+            Binding("5", "toggle_json_dump", "JSON", priority=True),
+            Binding("6", "load_console_log", "Log", priority=True),
+            Binding("f5", "refresh_html", "Refresh", priority=True),
+            Binding(":", "toggle_command_palette", "Command", priority=True),
+            Binding("r", "rerun_current", "Rerun", priority=True),
+            Binding("q", "quit", "Quit", priority=True),
         ]
 
         STATUS_THEME = {
@@ -138,6 +146,7 @@ def launch_tui(default_dataset: Path) -> None:
             workflow_options = [(spec.label, spec.workflow_id) for spec in list_workflow_specs()]
             html_options = [("refresh list first", "")]
             history_options = [("refresh list first", "")]
+            log_options = [("refresh list first", "")]
 
             with Vertical(id="root"):
                 yield Static(id="hero")
@@ -165,10 +174,13 @@ def launch_tui(default_dataset: Path) -> None:
                             yield Select(html_options, value="", prompt="select html", id="html_pick")
                             yield Static("history json", id="history_label")
                             yield Select(history_options, value="", prompt="select history", id="history_pick")
+                            yield Static("console log", id="log_label")
+                            yield Select(log_options, value="", prompt="select log", id="log_pick")
                             yield Button("1  RUN WORKFLOW", id="run_btn")
                             yield Button("2  OPEN LATEST", id="open_latest_btn")
                             yield Button("3  OPEN SELECTED", id="open_selected_btn")
                             yield Button("4  LOAD HISTORY", id="load_history_btn")
+                            yield Button("6  LOAD CONSOLE LOG", id="load_log_btn")
                             yield Button("R  RERUN CURRENT", id="rerun_btn")
                             yield Button("REFRESH ARTIFACT LISTS", id="refresh_btn")
                             yield Static(id="help_box")
@@ -187,6 +199,7 @@ def launch_tui(default_dataset: Path) -> None:
             self._last_result: WorkflowResult | None = None
             self._last_html: list[str] = []
             self._last_json: list[str] = []
+            self._last_logs: list[str] = []
             self._last_action = "idle"
             self._show_json_dump = False
             self._boot_lines = [
@@ -205,6 +218,7 @@ def launch_tui(default_dataset: Path) -> None:
             self._render_static_panels()
             self._refresh_html_options()
             self._refresh_history_options()
+            self._refresh_log_options()
             self._set_output(self._build_boot_log(self._boot_index))
             self.set_interval(0.55, self._refresh_dashboard)
             self._boot_timer = self.set_interval(0.16, self._advance_boot)
@@ -251,6 +265,7 @@ def launch_tui(default_dataset: Path) -> None:
                 "#budget_label",
                 "#html_label",
                 "#history_label",
+                "#log_label",
             ):
                 label = self.query_one(label_id, Static)
                 label.styles.color = palette["label_fg"]
@@ -264,7 +279,7 @@ def launch_tui(default_dataset: Path) -> None:
             control_header.styles.margin = (0, 0, 1, 0)
 
             self._style_field("#dataset", palette)
-            for select_id in ("#workflow", "#variant", "#preset", "#budget", "#html_pick", "#history_pick"):
+            for select_id in ("#workflow", "#variant", "#preset", "#budget", "#html_pick", "#history_pick", "#log_pick"):
                 self._style_field(select_id, palette)
 
             for check_id in ("#export_html", "#auto_open_html"):
@@ -277,6 +292,7 @@ def launch_tui(default_dataset: Path) -> None:
                 ("#open_latest_btn", "#E0A95A", "#37240F", "#FFE0AF"),
                 ("#open_selected_btn", "#2E8DB5", "#102B3E", "#DDF8FF"),
                 ("#load_history_btn", "#C24652", "#260E11", "#FFE7DD"),
+                ("#load_log_btn", "#2E8DB5", "#0D2030", "#E3F8FF"),
                 ("#rerun_btn", "#8A6CFF", "#1B1437", "#E2DCFF"),
                 ("#refresh_btn", "#4FC3F7", "#092233", "#E3F8FF"),
             ):
@@ -350,6 +366,7 @@ def launch_tui(default_dataset: Path) -> None:
                 "#budget_label",
                 "#html_label",
                 "#history_label",
+                "#log_label",
             ):
                 label = self.query_one(label_id, Static)
                 label.styles.color = palette["label_fg"]
@@ -357,7 +374,7 @@ def launch_tui(default_dataset: Path) -> None:
                 label.styles.background = palette["label_bg"]
 
             self._style_field("#dataset", palette)
-            for select_id in ("#workflow", "#variant", "#preset", "#budget", "#html_pick", "#history_pick"):
+            for select_id in ("#workflow", "#variant", "#preset", "#budget", "#html_pick", "#history_pick", "#log_pick"):
                 self._style_field(select_id, palette)
 
             cmdline = self.query_one("#cmdline", Input)
@@ -384,6 +401,11 @@ def launch_tui(default_dataset: Path) -> None:
             history_btn.styles.border = ("round", palette["artifact_border"])
             history_btn.styles.background = "#10202B" if not self._danger_workflow() else "#2A1115"
             history_btn.styles.color = palette["field_fg"]
+
+            log_btn = self.query_one("#load_log_btn", Button)
+            log_btn.styles.border = ("round", palette["output_border"])
+            log_btn.styles.background = "#0F2230" if not self._danger_workflow() else "#261317"
+            log_btn.styles.color = palette["field_fg"]
 
             rerun_btn = self.query_one("#rerun_btn", Button)
             rerun_btn.styles.border = ("round", palette["delta_border"])
@@ -573,7 +595,7 @@ def launch_tui(default_dataset: Path) -> None:
             telemetry.append(self._last_action, style=f"bold {palette['meta_value']}")
 
             hotkeys = Text(
-                " hotkeys :: [1] run workflow  [2] latest html  [3] refresh lists  [4] load history  [5] json dump  [r] rerun  [:] command  [q] quit ",
+                " hotkeys :: [1] run workflow  [2] latest html  [3] open selected html  [4] load history  [5] json dump  [6] console log  [F5] refresh lists  [r] rerun  [:] command  [q] quit ",
                 style=f"bold {palette['hotkeys']}",
             )
 
@@ -631,7 +653,7 @@ def launch_tui(default_dataset: Path) -> None:
             text = Text()
             text.append("CONTROL CARTRIDGES\n", style=f"bold {palette['accent_soft']}")
             text.append("workflow | variant | preset | budget\n", style=palette["meta_value"])
-            text.append("html | history | wheel / PgUp / PgDn = scroll", style=palette["hotkeys"])
+            text.append("html | history | console log | wheel / PgUp / PgDn = scroll", style=palette["hotkeys"])
             return Panel(text, border_style=palette["artifact_border"], box=box.HEAVY)
 
         def _build_help_panel(self) -> Panel:
@@ -648,6 +670,8 @@ def launch_tui(default_dataset: Path) -> None:
             text.append("render saved json artifact without rerunning\n", style="#87B7C8")
             text.append("5  JSON DUMP       ", style="bold #D7EEFF")
             text.append("toggle raw json channel with line numbers\n", style="#87B7C8")
+            text.append("6  CONSOLE LOG     ", style="bold #DDF8FF")
+            text.append("load saved console output with line numbers\n", style="#87B7C8")
             text.append("R  RERUN           ", style="bold #E2DCFF")
             text.append("repeat previous workflow\n", style="#87B7C8")
             text.append(":  COMMAND         ", style="bold #E6DDFF")
@@ -672,8 +696,10 @@ def launch_tui(default_dataset: Path) -> None:
             text.append("> press 3 to open selected html file\n", style=palette["meta_label"])
             text.append("> press 4 to load selected json history artifact\n", style=palette["meta_label"])
             text.append("> press 5 to toggle forensic json dump for current result\n", style=palette["meta_label"])
+            text.append("> press 6 to load selected console log artifact\n", style=palette["meta_label"])
             text.append("> press r to rerun previous workflow\n", style=palette["delta_border"])
             text.append("> press : to open command palette\n", style="#E0B8FF")
+            text.append("> press F5 to refresh html/json/log artifact lists\n", style=palette["hotkeys"])
             text.append("> use PgUp / PgDn to scroll long control stacks and output modules\n", style=palette["hotkeys"])
             return self._wrap_with_scanlines(
                 Panel(
@@ -830,6 +856,18 @@ def launch_tui(default_dataset: Path) -> None:
             )
             return self._channel_frame(f"FORENSIC JSON :: {path.name}", syntax, palette["output_border"])
 
+        def _console_log_panel(self, title: str, text: str) -> Panel:
+            palette = self._palette()
+            syntax = Syntax(
+                text,
+                "text",
+                theme="monokai",
+                line_numbers=True,
+                word_wrap=False,
+                background_color="default",
+            )
+            return self._channel_frame(title, syntax, palette["output_border"])
+
         def _format_signal(self, value: Any, limit: int = 88) -> str:
             if value is None:
                 rendered = "n/a"
@@ -902,6 +940,66 @@ def launch_tui(default_dataset: Path) -> None:
             json_renderables: list[Any] = []
             if self._show_json_dump and json_paths:
                 json_renderables = [self._json_channel_index(result, json_paths), self._json_dump_panel(json_paths[0])]
+
+            if result.family == "log":
+                assessment_rows = result.summary.get("assessment_rows")
+                benchmark_rows = result.summary.get("benchmark_rows")
+                if not isinstance(assessment_rows, list) or not isinstance(benchmark_rows, list):
+                    analysis = analyze_console_log(
+                        str(result.summary.get("workflow", result.workflow_id)),
+                        result.transcript,
+                        html_artifacts=result.html_artifacts,
+                    )
+                    assessment_rows = analysis["assessment_rows"]
+                    benchmark_rows = analysis["benchmark_rows"]
+                return self._wrap_with_scanlines(
+                    self._telemetry_frame(
+                        "THREAT",
+                        [
+                            ("workflow", self._format_signal(result.summary.get("workflow", result.workflow_id))),
+                            ("family", self._format_signal(result.summary.get("family", "legacy"))),
+                            ("dataset", self._format_signal(result.summary.get("dataset"))),
+                            ("timestamp", self._format_signal(result.summary.get("timestamp"))),
+                        ],
+                        palette["signal_border"],
+                        skull=self._danger_workflow(),
+                    ),
+                    self._telemetry_frame(
+                        "SIGNAL",
+                        [
+                            ("variant", self._format_signal(result.summary.get("variant"))),
+                            ("preset", self._format_signal(result.summary.get("preset"))),
+                            ("budget", self._format_signal(result.summary.get("training_budget_mode"))),
+                            ("log_file", self._format_signal(result.summary.get("log_file"))),
+                        ],
+                        palette["signal_border"],
+                    ),
+                    self._console_log_panel(
+                        f"CONSOLE TRACE :: {self._format_signal(result.summary.get('log_file', 'log'))}",
+                        result.transcript or "No console log body loaded.",
+                    ),
+                    self._telemetry_frame(
+                        "OVERALL ASSESSMENT",
+                        [(str(key), str(value)) for key, value in assessment_rows],
+                        palette["signal_border"],
+                    ),
+                    self._telemetry_frame(
+                        "FLAG BENCHMARK",
+                        [(str(key), str(value)) for key, value in benchmark_rows],
+                        palette["delta_border"],
+                    ),
+                    self._telemetry_frame(
+                        "RISK DELTA",
+                        [
+                            ("log_chars", str(len(result.transcript))),
+                            ("log_lines", str(len(result.transcript.splitlines()))),
+                            ("html_channels", str(len(result.html_artifacts))),
+                            ("artifact_keys", str(len(result.artifacts))),
+                        ],
+                        palette["delta_border"],
+                    ),
+                    self._artifact_panel(result),
+                )
 
             if result.payload is not None and result.workflow_id == "profile":
                 report = result.payload
@@ -1102,9 +1200,35 @@ def launch_tui(default_dataset: Path) -> None:
             if self._last_json:
                 select.value = self._last_json[0]
 
+        def _refresh_log_options(self) -> None:
+            log_files = scan_log_artifacts()
+            self._last_logs = [str(path) for path in log_files[:25]]
+            select = self.query_one("#log_pick", Select)
+            options = [("select console log", "")]
+            options.extend((describe_log_artifact(path), path) for path in self._last_logs)
+            select.set_options(options)
+            if self._last_logs:
+                select.value = self._last_logs[0]
+
         def _sync_controls_from_history(self, result: WorkflowResult) -> None:
             if result.workflow_id in WORKFLOW_SPECS:
                 self.query_one("#workflow", Select).value = result.workflow_id
+
+            summary = result.summary if isinstance(result.summary, dict) else {}
+            summary_dataset = summary.get("dataset")
+            if summary_dataset:
+                self.query_one("#dataset", Input).value = str(summary_dataset)
+            summary_variant = str(summary.get("variant", ""))
+            if summary_variant.startswith("A"):
+                self.query_one("#variant", Select).value = "A"
+            elif summary_variant.startswith("B"):
+                self.query_one("#variant", Select).value = "B"
+            summary_preset = str(summary.get("preset", ""))
+            if summary_preset in {"quick", "research"}:
+                self.query_one("#preset", Select).value = summary_preset
+            summary_budget = str(summary.get("training_budget_mode", ""))
+            if summary_budget in {"default", "auto"}:
+                self.query_one("#budget", Select).value = summary_budget
 
             payload = result.payload
             if payload is None:
@@ -1150,6 +1274,23 @@ def launch_tui(default_dataset: Path) -> None:
             self._sync_controls_from_history(result)
             self._set_output(self._build_result_output(result))
             self._set_status("success", f"history loaded: {Path(path).name}")
+
+        def _load_console_log(self, path: str) -> None:
+            if not path:
+                self._set_status("error", "no console log selected")
+                return
+            try:
+                result = load_console_log_result(path)
+            except Exception as exc:  # pragma: no cover - interactive path
+                self._set_status("error", str(exc))
+                return
+
+            self._last_result = result
+            self._last_action = f"log:{Path(path).stem}"
+            self._show_json_dump = False
+            self._sync_controls_from_history(result)
+            self._set_output(self._build_result_output(result))
+            self._set_status("success", f"console log loaded: {Path(path).name}")
 
         def _validate_request(self) -> WorkflowRequest | None:
             request = self._request()
@@ -1211,11 +1352,18 @@ def launch_tui(default_dataset: Path) -> None:
             self._last_action = f"open:{Path(target).name}"
             self._set_status("success", f"opened {Path(target).name}")
 
+        def action_open_selected_html(self) -> None:
+            self._open_selected_html()
+
         def action_refresh_html(self) -> None:
             self._refresh_html_options()
             self._refresh_history_options()
+            self._refresh_log_options()
             self._last_action = "refresh-html"
-            self._set_status("success", f"refreshed {len(self._last_html)} html and {len(self._last_json)} json artifacts")
+            self._set_status(
+                "success",
+                f"refreshed {len(self._last_html)} html, {len(self._last_json)} json, {len(self._last_logs)} log artifacts",
+            )
 
         def action_load_history(self) -> None:
             target = self.query_one("#history_pick", Select).value
@@ -1225,6 +1373,15 @@ def launch_tui(default_dataset: Path) -> None:
                 self._set_status("error", "no history json available")
                 return
             self._load_history(str(target))
+
+        def action_load_console_log(self) -> None:
+            target = self.query_one("#log_pick", Select).value
+            if not target:
+                target = latest_log_artifact(self._last_logs)
+            if not target:
+                self._set_status("error", "no console log available")
+                return
+            self._load_console_log(str(target))
 
         def action_toggle_json_dump(self) -> None:
             self._show_json_dump = not self._show_json_dump
@@ -1254,6 +1411,8 @@ def launch_tui(default_dataset: Path) -> None:
                 self._open_selected_html()
             elif event.button.id == "load_history_btn":
                 self.action_load_history()
+            elif event.button.id == "load_log_btn":
+                self.action_load_console_log()
             elif event.button.id == "rerun_btn":
                 self.action_rerun_current()
             elif event.button.id == "refresh_btn":
@@ -1261,6 +1420,11 @@ def launch_tui(default_dataset: Path) -> None:
 
         def _open_selected_html(self) -> None:
             value = self.query_one("#html_pick", Select).value
+            if not value:
+                self._refresh_html_options()
+                value = self.query_one("#html_pick", Select).value
+            if not value:
+                value = latest_html_artifact(self._last_result.html_artifacts if self._last_result else self._last_html)
             if not value:
                 self._set_status("error", "no html selected")
                 return
@@ -1295,7 +1459,7 @@ def launch_tui(default_dataset: Path) -> None:
                 self.action_open_latest()
                 return
             if normalized == "html open":
-                self._open_selected_html()
+                self.action_open_selected_html()
                 return
             if normalized == "history latest":
                 target = latest_json_artifact(self._last_json)
@@ -1306,6 +1470,16 @@ def launch_tui(default_dataset: Path) -> None:
                 return
             if normalized == "history load":
                 self.action_load_history()
+                return
+            if normalized == "log latest":
+                target = latest_log_artifact(self._last_logs)
+                if target:
+                    self._load_console_log(target)
+                else:
+                    self._set_status("error", "no console log available")
+                return
+            if normalized in {"log load", "console log", "console load"}:
+                self.action_load_console_log()
                 return
             if normalized in {"json", "json toggle", "json dump"}:
                 self.action_toggle_json_dump()
@@ -1409,6 +1583,7 @@ def launch_tui(default_dataset: Path) -> None:
             self._set_output(self._build_result_output(result))
             self._refresh_html_options()
             self._refresh_history_options()
+            self._refresh_log_options()
             self._set_status("success", f"{result.workflow_id} completed")
             if self.query_one("#auto_open_html", Checkbox).value and result.html_artifacts:
                 self.action_open_latest()
