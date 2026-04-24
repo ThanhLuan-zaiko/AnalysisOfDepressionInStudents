@@ -99,36 +99,43 @@ def print_warnings(warnings: list[str], console: Any | None = None) -> None:
 
 
 def print_profile_report(report: Any, console: Any | None = None) -> None:
+    summary = _value(report, "summary", report if isinstance(report, dict) else {})
+    warnings_list = _value(report, "warnings", [])
     if console is None or Table is None:
-        print(report.summary)
-        print_warnings(report.warnings, console=None)
+        print(summary)
+        print_warnings(warnings_list, console=None)
         return
 
     table = Table(title="Dataset Profile", border_style=PALETTE["primary"])
     table.add_column("Field", style=PALETTE["secondary"])
     table.add_column("Value", style="white")
-    for key, value in report.summary.items():
+    for key, value in summary.items():
         table.add_row(str(key), str(value))
     console.print(table)
-    print_warnings(report.warnings, console)
+    print_warnings(warnings_list, console)
 
 
 def print_run_report(report: Any, console: Any | None = None) -> None:
+    config = _value(report, "config", {})
+    models = _value(report, "models", {})
+    warnings_list = _value(report, "warnings", [])
+    timing_values = _value(report, "timings", {})
+
     if console is None or Table is None:
-        print(report.config)
-        for name, model in report.models.items():
-            print(name, model.holdout)
-        print_warnings(report.warnings, console=None)
+        print(config)
+        for name, model in models.items():
+            print(name, _value(model, "holdout", {}))
+        print_warnings(warnings_list, console=None)
         return
 
     meta = Table(title="Run Config", border_style=PALETTE["secondary"])
     meta.add_column("Field")
     meta.add_column("Value")
-    meta.add_row("profile", report.config["profile"])
-    meta.add_row("preset", report.config["preset"])
-    meta.add_row("models", ", ".join(report.config["models"]))
-    meta.add_row("selected_columns", ", ".join(report.config["selected_columns"]))
-    rust_engine = report.config.get("rust_engine")
+    meta.add_row("profile", str(config.get("profile")))
+    meta.add_row("preset", str(config.get("preset")))
+    meta.add_row("models", ", ".join(config.get("models", [])))
+    meta.add_row("selected_columns", ", ".join(config.get("selected_columns", [])))
+    rust_engine = config.get("rust_engine")
     if rust_engine:
         rust_label = "available"
         if not rust_engine.get("available"):
@@ -138,8 +145,12 @@ def print_run_report(report: Any, console: Any | None = None) -> None:
         meta.add_row("rust_engine", rust_label)
     console.print(meta)
 
-    for model_name, model in report.models.items():
-        engine = model.metadata.get("engine")
+    for model_name, model in models.items():
+        metadata = _value(model, "metadata", {})
+        oof = _value(model, "oof", {})
+        holdout = _value(model, "holdout", {})
+        feature_importance = _value(model, "feature_importance", [])
+        engine = metadata.get("engine")
         title = f"{model_name.title()} Holdout Metrics"
         if engine:
             title = f"{title} [{engine}]"
@@ -148,14 +159,14 @@ def print_run_report(report: Any, console: Any | None = None) -> None:
         table.add_column("OOF")
         table.add_column("Holdout")
         for metric in ("roc_auc", "pr_auc", "f1", "recall", "precision", "brier_score"):
-            table.add_row(metric, str(model.oof.get(metric)), str(model.holdout.get(metric)))
+            table.add_row(metric, str(oof.get(metric)), str(holdout.get(metric)))
         console.print(table)
 
-        if model.feature_importance:
+        if feature_importance:
             top = Table(title=f"{model_name.title()} Top Features", border_style=PALETTE["accent"])
             top.add_column("Feature")
             top.add_column("Signal")
-            for row in model.feature_importance[:8]:
+            for row in feature_importance[:8]:
                 signal = row.get(
                     "importance",
                     row.get(
@@ -166,34 +177,91 @@ def print_run_report(report: Any, console: Any | None = None) -> None:
                 top.add_row(str(row["feature"]), str(signal))
             console.print(top)
 
-    timings = Table(title="Timings", border_style=PALETTE["secondary"])
-    timings.add_column("Stage")
-    timings.add_column("Seconds")
-    for key, value in report.timings.items():
-        timings.add_row(key, str(value))
-    console.print(timings)
-    print_warnings(report.warnings, console)
+    timings_table = Table(title="Timings", border_style=PALETTE["secondary"])
+    timings_table.add_column("Stage")
+    timings_table.add_column("Seconds")
+    for key, value in timing_values.items():
+        timings_table.add_row(key, str(value))
+    console.print(timings_table)
+    print_warnings(warnings_list, console)
 
 
 def print_comparison_report(report: Any, console: Any | None = None) -> None:
+    summary = _value(report, "summary", {})
+    preset = _value(report, "preset", "?")
     if console is None or Table is None:
-        print(report.summary)
+        print(summary)
         return
 
-    table = Table(title=f"Profile Comparison ({report.preset})", border_style=PALETTE["accent"])
+    table = Table(title=f"Profile Comparison ({preset})", border_style=PALETTE["accent"])
     table.add_column("Model")
     table.add_column("Safe ROC-AUC")
     table.add_column("Full ROC-AUC")
     table.add_column("Delta")
     table.add_column("Safe F1")
     table.add_column("Full F1")
-    for model_name, summary in report.summary.items():
+    for model_name, metrics in summary.items():
         table.add_row(
             model_name,
-            str(summary["safe_roc_auc"]),
-            str(summary["full_roc_auc"]),
-            str(summary["roc_auc_delta_full_minus_safe"]),
-            str(summary["safe_f1"]),
-            str(summary["full_f1"]),
+            str(metrics["safe_roc_auc"]),
+            str(metrics["full_roc_auc"]),
+            str(metrics["roc_auc_delta_full_minus_safe"]),
+            str(metrics["safe_f1"]),
+            str(metrics["full_f1"]),
         )
     console.print(table)
+
+
+def print_workflow_result(result: Any, console: Any | None = None) -> None:
+    payload = getattr(result, "payload", None)
+    workflow_id = getattr(result, "workflow_id", "workflow")
+
+    if payload is not None:
+        if workflow_id == "profile":
+            print_profile_report(payload, console)
+            return
+        if workflow_id == "compare":
+            print_comparison_report(payload, console)
+            return
+        if workflow_id == "run":
+            print_run_report(payload, console)
+            return
+
+    transcript = getattr(result, "transcript", "")
+    artifacts = getattr(result, "artifacts", {})
+    html_artifacts = getattr(result, "html_artifacts", [])
+
+    if console is None or Table is None:
+        if transcript:
+            print(transcript)
+        if artifacts:
+            print("Artifacts:")
+            for key, value in artifacts.items():
+                print(f"- {key}: {value}")
+        if html_artifacts:
+            print("HTML:")
+            for path in html_artifacts[:8]:
+                print(f"- {path}")
+        return
+
+    if transcript:
+        console.print(Panel(transcript, title=f"{workflow_id} transcript", border_style=PALETTE["secondary"]))
+    if artifacts:
+        table = Table(title=f"{workflow_id} artifacts", border_style=PALETTE["accent"], show_header=False)
+        table.add_column("Key")
+        table.add_column("Value")
+        for key, value in artifacts.items():
+            table.add_row(str(key), str(value))
+        console.print(table)
+    if html_artifacts:
+        table = Table(title="HTML Artifacts", border_style=PALETTE["primary"], show_header=False)
+        table.add_column("Path")
+        for path in html_artifacts[:8]:
+            table.add_row(path)
+        console.print(table)
+
+
+def _value(report: Any, key: str, default: Any) -> Any:
+    if isinstance(report, dict):
+        return report.get(key, default)
+    return getattr(report, key, default)

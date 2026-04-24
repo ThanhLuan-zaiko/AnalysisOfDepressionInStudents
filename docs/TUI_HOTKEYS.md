@@ -20,9 +20,9 @@ robot-tui
 
 | Phím | Chức năng |
 |---|---|
-| `1` | Chạy hồ sơ dữ liệu |
-| `2` | Chạy pipeline theo `profile` và `preset` đang chọn |
-| `3` | So sánh `safe` và `full` |
+| `1` | Chạy workflow đang chọn |
+| `2` | Mở HTML mới nhất |
+| `3` | Refresh danh sách HTML |
 | `r` | Chạy lại tác vụ gần nhất |
 | `:` | Mở command palette |
 | `q` | Thoát ứng dụng |
@@ -54,14 +54,19 @@ Nhấn `:` để mở ô lệnh ở vùng trên cùng của khu vực report, sa
 
 ```text
 :help
-:profile
 :run
-:compare
 :rerun
-:set profile safe
-:set profile full
+:html latest
+:html open
+:refresh html
+:set workflow profile
+:set workflow analysis
+:set variant A
+:set variant B
 :set preset quick
 :set preset research
+:set budget default
+:set budget auto
 :set dataset Student_Depression_Dataset.csv
 ```
 

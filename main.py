@@ -23,6 +23,8 @@ import polars as pl
 import numpy as np
 import io
 
+from src.training_budget import resolve_training_budget
+
 # Fix Windows console encoding
 if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
@@ -335,6 +337,7 @@ def main(
     run_subgroups: bool = False,
     run_robustness: bool = False,
     run_report: bool = False,
+    training_budget_mode: str = "default",
 ):
     """
     Main analysis pipeline — chạy theo giai đoạn tùy chọn.
@@ -411,7 +414,7 @@ def main(
     # ---- Giai đoạn 7-8: Models ----
     if run_models:
         with Timer("Machine Learning"):
-            run_ml_pipeline(df, conservative=conservative)
+            run_ml_pipeline(df, conservative=conservative, training_budget_mode=training_budget_mode)
 
     # ---- Giai đoạn Fairness + Subgroup + Robustness ----
     if run_fairness or run_subgroups or run_robustness:
@@ -422,6 +425,7 @@ def main(
                 run_subgroups=run_subgroups,
                 run_robustness=run_robustness,
                 conservative=conservative,
+                training_budget_mode=training_budget_mode,
             )
 
     # ---- Giai đoạn Report ----
@@ -778,6 +782,7 @@ def run_advanced_analysis(
     run_subgroups: bool = True,
     run_robustness: bool = True,
     conservative: bool = True,
+    training_budget_mode: str = "default",
 ):
     """
     Chạy Fairness + Subgroup + Robustness analysis.
@@ -797,7 +802,16 @@ def run_advanced_analysis(
     print("=" * 80)
 
     # Reload models (they should already be trained)
-    modeler = DepressionRiskModeler()
+    resolved_budget = resolve_training_budget(
+        mode=training_budget_mode,
+        family="legacy",
+        preset="research",
+        train_rows=df.height,
+    )
+    modeler = DepressionRiskModeler(
+        training_budget_mode=training_budget_mode,
+        training_budget=resolved_budget,
+    )
     modeler.run_full_pipeline(
         df,
         include_suicidal=include_suicidal,
@@ -941,7 +955,7 @@ def run_advanced_analysis(
                     retrained = LogisticRegression(
                         C=1.0,
                         class_weight="balanced",
-                        max_iter=1000,
+                        max_iter=resolved_budget.get("logistic", {}).get("max_iter", 1000),
                         random_state=42,
                     )
                     retrained.fit(X_train_scaled, y_train)
@@ -951,14 +965,19 @@ def run_advanced_analysis(
                 elif name == "catboost":
                     from catboost import CatBoostClassifier
                     retrained = CatBoostClassifier(
-                        iterations=500,
-                        learning_rate=0.05,
-                        depth=6,
+                        iterations=resolved_budget.get("catboost", {}).get("iterations", 500),
+                        learning_rate=resolved_budget.get("catboost", {}).get("learning_rate", 0.05),
+                        depth=resolved_budget.get("catboost", {}).get("depth", 6),
                         class_weights=[1.0, 1.5],
                         random_seed=42,
                         verbose=0,
                     )
-                    retrained.fit(X_train, y_train, eval_set=(X_test, y_test), early_stopping_rounds=50)
+                    retrained.fit(
+                        X_train,
+                        y_train,
+                        eval_set=(X_test, y_test),
+                        early_stopping_rounds=resolved_budget.get("catboost", {}).get("early_stopping_rounds", 50),
+                    )
                     y_proba_test = retrained.predict_proba(X_test)[:, 1]
                     y_pred_test = retrained.predict(X_test)
                     return retrained, y_proba_test, y_pred_test
@@ -986,7 +1005,11 @@ def run_advanced_analysis(
             robustness.plot_robustness_dashboard(results, output_path=dashboard_path)
 
 
-def run_ml_pipeline(df: pl.DataFrame, conservative: bool = False):
+def run_ml_pipeline(
+    df: pl.DataFrame,
+    conservative: bool = False,
+    training_budget_mode: str = "default",
+):
     """Giai đoạn 7-9: Xây dựng mô hình + Fairness + Threshold.
 
     Args:
@@ -1009,7 +1032,7 @@ def run_ml_pipeline(df: pl.DataFrame, conservative: bool = False):
         print("     (Hiệu năng cao nhất, nhưng OR = 12.388 cho Suicidal thoughts)")
     print("=" * 80)
 
-    modeler = DepressionRiskModeler()
+    modeler = DepressionRiskModeler(training_budget_mode=training_budget_mode)
     results = modeler.run_full_pipeline(
         df,
         include_suicidal=include_suicidal,

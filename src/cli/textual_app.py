@@ -1,30 +1,36 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from rich.align import Align
 from rich import box
-from rich.columns import Columns
 from rich.console import Group
 from rich.panel import Panel
+from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
-from src.app import (
-    ArtifactPolicy,
-    RunPreset,
-    RunProfile,
-    compare_profiles,
-    load_dataset,
-    profile_dataset,
-    run_pipeline,
+from .workflows import (
+    WORKFLOW_SPECS,
+    WorkflowRequest,
+    WorkflowResult,
+    describe_json_artifact,
+    execute_workflow,
+    latest_json_artifact,
+    latest_html_artifact,
+    list_workflow_specs,
+    load_history_result,
+    open_html_artifact,
+    scan_html_artifacts,
+    scan_json_artifacts,
 )
 
 
 def launch_tui(default_dataset: Path) -> None:
-    from textual import work
+    from textual import events, work
     from textual.app import App, ComposeResult
     from textual.containers import Horizontal, Vertical, VerticalScroll
     from textual.widgets import Button, Checkbox, Footer, Input, Select, Static
@@ -33,9 +39,11 @@ def launch_tui(default_dataset: Path) -> None:
         TITLE = "Sen Analytics"
         SUB_TITLE = "Monitor Mode"
         BINDINGS = [
-            ("1", "run_profile", "Profile"),
-            ("2", "run_pipeline_hotkey", "Pipeline"),
-            ("3", "run_compare", "Compare"),
+            ("1", "run_current", "Run"),
+            ("2", "open_latest", "Latest"),
+            ("3", "refresh_html", "Refresh"),
+            ("4", "load_history", "History"),
+            ("5", "toggle_json_dump", "JSON"),
             (":", "toggle_command_palette", "Command"),
             ("r", "rerun_current", "Rerun"),
             ("q", "quit", "Quit"),
@@ -47,8 +55,90 @@ def launch_tui(default_dataset: Path) -> None:
             "success": {"fg": "#96FFB8", "bg": "#0D1712", "border": "#43D17A"},
             "error": {"fg": "#FF9FA4", "bg": "#1A0D10", "border": "#E05D5D"},
         }
+        DANGER_STATUS_THEME = {
+            "ready": {"fg": "#FFC0B8", "bg": "#17090B", "border": "#C24652"},
+            "running": {"fg": "#FFD3A8", "bg": "#261208", "border": "#FF8A5B"},
+            "success": {"fg": "#FFD3A8", "bg": "#241108", "border": "#D8692E"},
+            "error": {"fg": "#FFE2DE", "bg": "#23080B", "border": "#FF5252"},
+        }
+        PALETTES = {
+            "default": {
+                "screen_bg": "#061018",
+                "sidebar_bg": "#050D13",
+                "sidebar_border": "#14303F",
+                "label_fg": "#67D5FF",
+                "label_border": "#14303F",
+                "label_bg": "#07131B",
+                "field_border": "#194A63",
+                "field_bg": "#081119",
+                "field_fg": "#DDF8FF",
+                "output_border": "#1E6B8F",
+                "output_bg": "#030A10",
+                "footer_bg": "#101820",
+                "footer_fg": "#FFD67A",
+                "footer_border": "#2E8DB5",
+                "cmd_border": "#7A5DFF",
+                "cmd_bg": "#120F24",
+                "cmd_fg": "#ECE7FF",
+                "hero_border": "#1E6B8F",
+                "hero_title": "#FFD67A",
+                "banner": "#7AF5C2",
+                "noise": "#1A3949",
+                "grid": "#14303F",
+                "meta_label": "#67D5FF",
+                "meta_value": "#D8FEE3",
+                "separator": "#2E8DB5",
+                "hotkeys": "#9EC6D6",
+                "accent": "#43D17A",
+                "accent_soft": "#93F5C6",
+                "accent_bg": "#103021",
+                "signal_border": "#1E6B8F",
+                "delta_border": "#8A6CFF",
+                "artifact_border": "#23536C",
+                "skull": "#FF9FA4",
+            },
+            "danger": {
+                "screen_bg": "#12070A",
+                "sidebar_bg": "#0D0507",
+                "sidebar_border": "#4A1419",
+                "label_fg": "#FF8E78",
+                "label_border": "#4A1419",
+                "label_bg": "#18090C",
+                "field_border": "#74232B",
+                "field_bg": "#12080B",
+                "field_fg": "#FFE7DD",
+                "output_border": "#84252D",
+                "output_bg": "#090204",
+                "footer_bg": "#1A0B0F",
+                "footer_fg": "#FFB16E",
+                "footer_border": "#A2353A",
+                "cmd_border": "#C24652",
+                "cmd_bg": "#190B10",
+                "cmd_fg": "#FFF0EA",
+                "hero_border": "#A2353A",
+                "hero_title": "#FFB16E",
+                "banner": "#FF8E78",
+                "noise": "#42151A",
+                "grid": "#3A1116",
+                "meta_label": "#FF8E78",
+                "meta_value": "#FFE7DD",
+                "separator": "#B3412F",
+                "hotkeys": "#FFC89C",
+                "accent": "#FF5252",
+                "accent_soft": "#FFB3A6",
+                "accent_bg": "#341014",
+                "signal_border": "#C24652",
+                "delta_border": "#FF8A5B",
+                "artifact_border": "#B3412F",
+                "skull": "#FFD0C7",
+            },
+        }
 
         def compose(self) -> ComposeResult:
+            workflow_options = [(spec.label, spec.workflow_id) for spec in list_workflow_specs()]
+            html_options = [("refresh list first", "")]
+            history_options = [("refresh list first", "")]
+
             with Vertical(id="root"):
                 yield Static(id="hero")
                 with Horizontal(id="layout"):
@@ -61,25 +151,26 @@ def launch_tui(default_dataset: Path) -> None:
                                 placeholder="Student_Depression_Dataset.csv",
                                 id="dataset",
                             )
-                            yield Static("profile", id="profile_label")
-                            yield Select(
-                                [(label.title(), label) for label in (RunProfile.SAFE.value, RunProfile.FULL.value)],
-                                value=RunProfile.SAFE.value,
-                                prompt="select profile",
-                                id="profile",
-                            )
+                            yield Static("workflow", id="workflow_label")
+                            yield Select(workflow_options, value="profile", prompt="select workflow", id="workflow")
+                            yield Static("variant", id="variant_label")
+                            yield Select([("A / safe", "A"), ("B / full", "B")], value="A", prompt="select variant", id="variant")
                             yield Static("preset", id="preset_label")
-                            yield Select(
-                                [(label.title(), label) for label in (RunPreset.QUICK.value, RunPreset.RESEARCH.value)],
-                                value=RunPreset.QUICK.value,
-                                prompt="select preset",
-                                id="preset",
-                            )
-                            yield Checkbox("export html eda", value=False, id="export_html")
-                            yield Button("1  PROFILE", id="profile_btn")
-                            yield Button("2  RUN PIPELINE", id="run_btn")
-                            yield Button("3  COMPARE", id="compare_btn")
+                            yield Select([("Quick", "quick"), ("Research", "research")], value="quick", prompt="select preset", id="preset")
+                            yield Static("budget", id="budget_label")
+                            yield Select([("Default", "default"), ("Auto", "auto")], value="default", prompt="select budget", id="budget")
+                            yield Checkbox("export html", value=False, id="export_html")
+                            yield Checkbox("auto-open latest html", value=False, id="auto_open_html")
+                            yield Static("html picker", id="html_label")
+                            yield Select(html_options, value="", prompt="select html", id="html_pick")
+                            yield Static("history json", id="history_label")
+                            yield Select(history_options, value="", prompt="select history", id="history_pick")
+                            yield Button("1  RUN WORKFLOW", id="run_btn")
+                            yield Button("2  OPEN LATEST", id="open_latest_btn")
+                            yield Button("3  OPEN SELECTED", id="open_selected_btn")
+                            yield Button("4  LOAD HISTORY", id="load_history_btn")
                             yield Button("R  RERUN CURRENT", id="rerun_btn")
+                            yield Button("REFRESH ARTIFACT LISTS", id="refresh_btn")
                             yield Static(id="help_box")
                     with Vertical(id="workspace"):
                         yield Static(id="status_bar")
@@ -91,108 +182,112 @@ def launch_tui(default_dataset: Path) -> None:
         def on_mount(self) -> None:
             self._tick = 0
             self._status_state = "ready"
-            self._status_message = "awaiting command"
+            self._status_message = "boot sequence starting"
+            self._last_request: WorkflowRequest | None = None
+            self._last_result: WorkflowResult | None = None
+            self._last_html: list[str] = []
+            self._last_json: list[str] = []
             self._last_action = "idle"
-            self._last_action_mode = "run"
+            self._show_json_dump = False
             self._boot_lines = [
-                "[00] boot sequence start",
+                "[00] cold start",
                 "[01] probing terminal capabilities",
-                "[02] loading sen analytics monitor profile",
-                "[03] binding hotkeys 1 2 3 r : q",
-                "[04] initializing holdout-first pipeline client",
-                "[05] telemetry clock online",
-                "[06] command panel online",
-                "[07] output renderer online",
-                "[08] system ready",
+                "[02] loading sen analytics monitor shell",
+                "[03] binding workflow controls",
+                "[04] indexing html artifact channels",
+                "[05] warming telemetry renderers",
+                "[06] routing command palette",
+                "[07] operator handshake established",
+                "[08] monitor grid online",
             ]
             self._boot_index = 1
             self._apply_theme()
             self._render_static_panels()
-            self._set_status("running", "boot sequence starting")
+            self._refresh_html_options()
+            self._refresh_history_options()
             self._set_output(self._build_boot_log(self._boot_index))
-            self._render_live_panels()
-            self._boot_timer = self.set_interval(0.16, self._advance_boot)
             self.set_interval(0.55, self._refresh_dashboard)
+            self._boot_timer = self.set_interval(0.16, self._advance_boot)
             self.set_timer(1.75, self._finish_boot)
 
         def _apply_theme(self) -> None:
-            self.styles.background = "#061018"
+            palette = self._palette()
+            self.styles.background = palette["screen_bg"]
 
             root = self.query_one("#root", Vertical)
             root.styles.width = "100%"
             root.styles.height = "100%"
             root.styles.padding = (1, 1)
-            root.styles.background = "#061018"
+            root.styles.background = palette["screen_bg"]
 
             hero = self.query_one("#hero", Static)
-            hero.styles.height = 11
+            hero.styles.height = 14
             hero.styles.margin = (0, 0, 1, 0)
 
             layout = self.query_one("#layout", Horizontal)
             layout.styles.height = "1fr"
 
             sidebar_scroll = self.query_one("#sidebar_scroll", VerticalScroll)
-            sidebar_scroll.styles.width = 42
-            sidebar_scroll.styles.min_width = 38
-            sidebar_scroll.styles.max_width = 46
+            sidebar_scroll.styles.width = 46
+            sidebar_scroll.styles.min_width = 42
+            sidebar_scroll.styles.max_width = 50
             sidebar_scroll.styles.height = "1fr"
             sidebar_scroll.styles.margin = (0, 1, 0, 0)
-            sidebar_scroll.styles.border = ("round", "#14303F")
-            sidebar_scroll.styles.background = "#07131B"
+            sidebar_scroll.styles.border = ("round", palette["sidebar_border"])
+            sidebar_scroll.styles.background = palette["sidebar_bg"]
             sidebar_scroll.styles.padding = (0, 1, 1, 0)
+            sidebar_scroll.show_vertical_scrollbar = True
 
             sidebar = self.query_one("#sidebar", Vertical)
             sidebar.styles.width = "100%"
             sidebar.styles.height = "auto"
+            sidebar.styles.padding = (1, 1, 2, 1)
 
-            workspace = self.query_one("#workspace", Vertical)
-            workspace.styles.width = "1fr"
-
-            for label_id in ("#dataset_label", "#profile_label", "#preset_label"):
+            for label_id in (
+                "#dataset_label",
+                "#workflow_label",
+                "#variant_label",
+                "#preset_label",
+                "#budget_label",
+                "#html_label",
+                "#history_label",
+            ):
                 label = self.query_one(label_id, Static)
-                label.styles.color = "#67D5FF"
+                label.styles.color = palette["label_fg"]
                 label.styles.text_style = "bold"
                 label.styles.margin = (1, 0, 0, 0)
+                label.styles.border = ("heavy", palette["label_border"])
+                label.styles.background = palette["label_bg"]
+                label.styles.padding = (0, 1)
 
-            dataset = self.query_one("#dataset", Input)
-            dataset.styles.border = ("round", "#2B5C75")
-            dataset.styles.background = "#0A1720"
-            dataset.styles.color = "#E9FFF2"
-            dataset.styles.margin = (0, 0, 1, 0)
+            control_header = self.query_one("#control_header", Static)
+            control_header.styles.margin = (0, 0, 1, 0)
 
-            for select_id in ("#profile", "#preset"):
-                select = self.query_one(select_id, Select)
-                select.styles.border = ("round", "#2B5C75")
-                select.styles.background = "#0A1720"
-                select.styles.color = "#E9FFF2"
-                select.styles.margin = (0, 0, 1, 0)
+            self._style_field("#dataset", palette)
+            for select_id in ("#workflow", "#variant", "#preset", "#budget", "#html_pick", "#history_pick"):
+                self._style_field(select_id, palette)
 
-            checkbox = self.query_one("#export_html", Checkbox)
-            checkbox.styles.color = "#9DEFC8"
-            checkbox.styles.margin = (1, 0, 1, 0)
+            for check_id in ("#export_html", "#auto_open_html"):
+                checkbox = self.query_one(check_id, Checkbox)
+                checkbox.styles.color = palette["accent_soft"]
+                checkbox.styles.margin = (1, 0, 0, 0)
 
             for button_id, border, bg, fg in (
-                ("#profile_btn", "#2E8DB5", "#102B3E", "#DDF8FF"),
                 ("#run_btn", "#43D17A", "#103021", "#E3FFE9"),
-                ("#compare_btn", "#E0A95A", "#37240F", "#FFE0AF"),
+                ("#open_latest_btn", "#E0A95A", "#37240F", "#FFE0AF"),
+                ("#open_selected_btn", "#2E8DB5", "#102B3E", "#DDF8FF"),
+                ("#load_history_btn", "#C24652", "#260E11", "#FFE7DD"),
                 ("#rerun_btn", "#8A6CFF", "#1B1437", "#E2DCFF"),
+                ("#refresh_btn", "#4FC3F7", "#092233", "#E3F8FF"),
             ):
                 button = self.query_one(button_id, Button)
                 button.styles.width = "100%"
                 button.styles.height = 3
-                button.styles.margin = (0, 0, 1, 0)
+                button.styles.margin = (1, 0, 0, 0)
                 button.styles.border = ("round", border)
                 button.styles.background = bg
                 button.styles.color = fg
                 button.styles.text_style = "bold"
-
-            control_header = self.query_one("#control_header", Static)
-            control_header.styles.height = 5
-            control_header.styles.margin = (0, 0, 1, 0)
-
-            help_box = self.query_one("#help_box", Static)
-            help_box.styles.height = "auto"
-            help_box.styles.margin = (1, 0, 0, 0)
 
             status_bar = self.query_one("#status_bar", Static)
             status_bar.styles.height = 3
@@ -201,28 +296,113 @@ def launch_tui(default_dataset: Path) -> None:
             cmdline = self.query_one("#cmdline", Input)
             cmdline.styles.height = 3
             cmdline.styles.margin = (0, 0, 1, 0)
-            cmdline.styles.border = ("round", "#7A5DFF")
-            cmdline.styles.background = "#120F24"
-            cmdline.styles.color = "#ECE7FF"
+            cmdline.styles.border = ("round", palette["cmd_border"])
+            cmdline.styles.background = palette["cmd_bg"]
+            cmdline.styles.color = palette["cmd_fg"]
             cmdline.display = False
 
             output_scroll = self.query_one("#output_scroll", VerticalScroll)
             output_scroll.styles.height = "1fr"
-            output_scroll.styles.border = ("round", "#1E6B8F")
-            output_scroll.styles.background = "#050D13"
+            output_scroll.styles.border = ("round", palette["output_border"])
+            output_scroll.styles.background = palette["output_bg"]
             output_scroll.styles.padding = (0, 1)
+            output_scroll.show_vertical_scrollbar = True
 
-            output = self.query_one("#output", Static)
-            output.styles.width = "100%"
-            output.styles.color = "#D8FEE3"
+            footer = self.query_one(Footer)
+            footer.styles.background = palette["footer_bg"]
+            footer.styles.color = palette["footer_fg"]
+            footer.styles.border_top = ("heavy", palette["footer_border"])
+
+        def _style_field(self, selector: str, palette: dict[str, str] | None = None) -> None:
+            palette = palette or self._palette()
+            widget = self.query_one(selector)
+            widget.styles.border = ("heavy", palette["field_border"])
+            widget.styles.background = palette["field_bg"]
+            widget.styles.color = palette["field_fg"]
+            widget.styles.margin = (0, 0, 1, 0)
+            widget.styles.padding = (0, 1)
+
+        def _palette(self) -> dict[str, str]:
+            return self.PALETTES["danger"] if self._danger_workflow() else self.PALETTES["default"]
+
+        def _status_theme_map(self) -> dict[str, dict[str, str]]:
+            return self.DANGER_STATUS_THEME if self._danger_workflow() else self.STATUS_THEME
+
+        def _apply_dynamic_palette(self) -> None:
+            palette = self._palette()
+
+            self.styles.background = palette["screen_bg"]
+            self.query_one("#root", Vertical).styles.background = palette["screen_bg"]
+
+            hero = self.query_one("#hero", Static)
+            hero.styles.height = 18 if self._danger_workflow() else 14
+
+            sidebar_scroll = self.query_one("#sidebar_scroll", VerticalScroll)
+            sidebar_scroll.styles.border = ("round", palette["sidebar_border"])
+            sidebar_scroll.styles.background = palette["sidebar_bg"]
+            sidebar_scroll.show_vertical_scrollbar = True
+
+            for label_id in (
+                "#dataset_label",
+                "#workflow_label",
+                "#variant_label",
+                "#preset_label",
+                "#budget_label",
+                "#html_label",
+                "#history_label",
+            ):
+                label = self.query_one(label_id, Static)
+                label.styles.color = palette["label_fg"]
+                label.styles.border = ("heavy", palette["label_border"])
+                label.styles.background = palette["label_bg"]
+
+            self._style_field("#dataset", palette)
+            for select_id in ("#workflow", "#variant", "#preset", "#budget", "#html_pick", "#history_pick"):
+                self._style_field(select_id, palette)
+
+            cmdline = self.query_one("#cmdline", Input)
+            cmdline.styles.border = ("round", palette["cmd_border"])
+            cmdline.styles.background = palette["cmd_bg"]
+            cmdline.styles.color = palette["cmd_fg"]
+
+            output_scroll = self.query_one("#output_scroll", VerticalScroll)
+            output_scroll.styles.border = ("round", palette["output_border"])
+            output_scroll.styles.background = palette["output_bg"]
+            output_scroll.show_vertical_scrollbar = True
+
+            footer = self.query_one(Footer)
+            footer.styles.background = palette["footer_bg"]
+            footer.styles.color = palette["footer_fg"]
+            footer.styles.border_top = ("heavy", palette["footer_border"])
+
+            run_btn = self.query_one("#run_btn", Button)
+            run_btn.styles.border = ("round", palette["accent"])
+            run_btn.styles.background = palette["accent_bg"]
+            run_btn.styles.color = palette["field_fg"]
+
+            history_btn = self.query_one("#load_history_btn", Button)
+            history_btn.styles.border = ("round", palette["artifact_border"])
+            history_btn.styles.background = "#10202B" if not self._danger_workflow() else "#2A1115"
+            history_btn.styles.color = palette["field_fg"]
+
+            rerun_btn = self.query_one("#rerun_btn", Button)
+            rerun_btn.styles.border = ("round", palette["delta_border"])
+            rerun_btn.styles.background = "#1B1437" if not self._danger_workflow() else "#2A1115"
+            rerun_btn.styles.color = "#E2DCFF" if not self._danger_workflow() else "#FFE4DE"
 
         def _render_static_panels(self) -> None:
             self.query_one("#control_header", Static).update(self._build_control_header())
             self.query_one("#help_box", Static).update(self._build_help_panel())
+            self._render_live_panels()
 
         def _refresh_dashboard(self) -> None:
             self._tick += 1
             self._render_live_panels()
+
+        def _render_live_panels(self) -> None:
+            self._apply_dynamic_palette()
+            self.query_one("#hero", Static).update(self._build_hero())
+            self.query_one("#status_bar", Static).update(self._build_status_panel())
 
         def _advance_boot(self) -> None:
             if self._last_action != "idle":
@@ -235,60 +415,14 @@ def launch_tui(default_dataset: Path) -> None:
             self._boot_index += 1
             self._set_output(self._build_boot_log(self._boot_index))
 
-        def _render_live_panels(self) -> None:
-            self.query_one("#hero", Static).update(self._build_hero())
-            self.query_one("#status_bar", Static).update(self._build_status_panel())
-
         def _finish_boot(self) -> None:
             if self._last_action == "idle":
                 self._set_output(self._build_idle_output())
+                self._set_status("ready", "awaiting workflow")
 
-        def _dataset(self) -> str:
-            return self.query_one("#dataset", Input).value.strip()
-
-        def _profile(self) -> RunProfile:
-            return RunProfile(self.query_one("#profile", Select).value)
-
-        def _preset(self) -> RunPreset:
-            return RunPreset(self.query_one("#preset", Select).value)
-
-        def _export_html(self) -> bool:
-            return self.query_one("#export_html", Checkbox).value
-
-        def _short_dataset(self) -> str:
-            dataset_path = self._dataset()
-            if not dataset_path:
-                return "none"
-            return Path(dataset_path).name
-
-        def _format_value(self, value: Any) -> str:
-            if value is None:
-                return "n/a"
-            if isinstance(value, float):
-                return f"{value:.4f}"
-            return str(value)
-
-        def _metric_pair(self, oof_value: Any, holdout_value: Any) -> str:
-            return f"oof {self._format_value(oof_value):>8} | holdout {self._format_value(holdout_value):>8}"
-
-        def _sparkline(self, values: list[float | None]) -> str:
-            blocks = "._-:=+*#@"
-            filtered = [float(value) for value in values if value is not None]
-            if not filtered:
-                return "n/a"
-            lo = min(filtered)
-            hi = max(filtered)
-            if hi - lo < 1e-12:
-                return blocks[-2] * len(filtered)
-            chars: list[str] = []
-            for value in filtered:
-                idx = round((value - lo) / (hi - lo) * (len(blocks) - 1))
-                chars.append(blocks[idx])
-            return "".join(chars)
-
-        def _noise_line(self, width: int = 92, offset: int = 0) -> str:
+        def _noise_line(self, width: int = 94, offset: int = 0) -> str:
             glyphs = " .:-=+*#"
-            seed = (self._tick * 7) + offset + len(self._short_dataset())
+            seed = (self._tick * 7) + offset + len(self._dataset_short())
             chars: list[str] = []
             for index in range(width):
                 code = (seed + index * 5 + (index // 3) * 11) % 17
@@ -299,9 +433,97 @@ def launch_tui(default_dataset: Path) -> None:
             return "".join(chars)
 
         def _wrap_with_scanlines(self, *renderables: Any) -> Group:
-            top = Text(self._noise_line(94, 1), style="#1A3949")
-            bottom = Text(self._noise_line(94, 9), style="#1A3949")
-            return Group(top, *renderables, bottom)
+            palette = self._palette()
+            top = Text(self._noise_line(112, 1), style=palette["noise"])
+            bottom = Text(self._noise_line(112, 9), style=palette["noise"])
+            stacked: list[Any] = [top]
+            for index, renderable in enumerate(renderables):
+                stacked.append(renderable)
+                if index < len(renderables) - 1:
+                    stacked.append(Text(""))
+            stacked.append(bottom)
+            return Group(*stacked)
+
+        def _grid_line(self, width: int = 108, offset: int = 0) -> str:
+            chars: list[str] = []
+            for index in range(width):
+                code = (self._tick + offset + index * 3 + (index // 7)) % 19
+                if code in {0, 6, 12}:
+                    chars.append("+")
+                elif code in {2, 9, 15}:
+                    chars.append(":")
+                elif code in {4, 11}:
+                    chars.append(".")
+                elif code == 17:
+                    chars.append("#")
+                else:
+                    chars.append(" ")
+            return "".join(chars)
+
+        def _radar_sweep(self, width: int = 100, offset: int = 0) -> str:
+            sweep = (self._tick * 3 + offset) % max(width, 1)
+            chars: list[str] = []
+            for index in range(width):
+                distance = abs(index - sweep)
+                if distance == 0:
+                    chars.append("@")
+                elif distance == 1:
+                    chars.append("#")
+                elif distance == 2:
+                    chars.append("*")
+                elif index % 13 == 0:
+                    chars.append("+")
+                elif index % 7 == 0:
+                    chars.append(":")
+                else:
+                    chars.append(".")
+            return "".join(chars)
+
+        def _danger_workflow(self) -> bool:
+            return self._workflow_id() in {"analysis", "robustness", "fairness", "subgroups"}
+
+        def _workflow_id(self) -> str:
+            return str(self.query_one("#workflow", Select).value)
+
+        def _selected_spec(self):
+            return WORKFLOW_SPECS[self._workflow_id()]
+
+        def _dataset_short(self) -> str:
+            value = self.query_one("#dataset", Input).value.strip()
+            return Path(value).name if value else "none"
+
+        def _field(self, payload: Any, key: str, default: Any = None) -> Any:
+            if isinstance(payload, dict):
+                return payload.get(key, default)
+            return getattr(payload, key, default)
+
+        def _summary_dict(self, payload: Any) -> dict[str, Any]:
+            summary = self._field(payload, "summary", payload if isinstance(payload, dict) else {})
+            if not isinstance(summary, dict):
+                return {}
+            if "rows" not in summary and isinstance(payload, dict) and isinstance(payload.get("shape"), dict):
+                summary = {
+                    **summary,
+                    "rows": payload["shape"].get("rows"),
+                    "cols": payload["shape"].get("cols"),
+                }
+            return summary
+
+        def _dict_field(self, payload: Any, key: str) -> dict[str, Any]:
+            value = self._field(payload, key, {})
+            return value if isinstance(value, dict) else {}
+
+        def _request(self) -> WorkflowRequest:
+            spec = self._selected_spec()
+            return WorkflowRequest(
+                workflow_id=spec.workflow_id,
+                dataset_path=self.query_one("#dataset", Input).value.strip(),
+                variant=str(self.query_one("#variant", Select).value or "A"),
+                preset=str(self.query_one("#preset", Select).value or spec.default_preset),
+                export_html=self.query_one("#export_html", Checkbox).value and spec.supports_export_html,
+                console_only=spec.family == "legacy",
+                training_budget_mode=str(self.query_one("#budget", Select).value or "default"),
+            )
 
         def _set_status(self, state: str, message: str) -> None:
             self._status_state = state
@@ -312,6 +534,8 @@ def launch_tui(default_dataset: Path) -> None:
             self.query_one("#output", Static).update(renderable)
 
         def _build_hero(self) -> Panel:
+            palette = self._palette()
+            spec = self._selected_spec()
             pulse = "|/-\\"[self._tick % 4] if self._status_state == "running" else ">"
             clock = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -328,47 +552,70 @@ def launch_tui(default_dataset: Path) -> None:
                         "    \\|_________|                                                                     \\/                                     \\|_________|",
                     ]
                 ),
-                style="bold #7AF5C2",
+                style=f"bold {palette['banner']}",
             )
 
             telemetry = Text()
-            telemetry.append(f" {pulse} ", style="bold #0A141B on #93F5C6")
-            telemetry.append("clock ", style="bold #67D5FF")
-            telemetry.append(clock, style="bold #D8FEE3")
-            telemetry.append("  ||  ", style="bold #2E8DB5")
-            telemetry.append("dataset ", style="bold #67D5FF")
-            telemetry.append(self._short_dataset(), style="bold #D8FEE3")
-            telemetry.append("  ||  ", style="bold #2E8DB5")
-            telemetry.append("profile ", style="bold #67D5FF")
-            telemetry.append(self._profile().value, style="bold #93F5C6")
-            telemetry.append("  ||  ", style="bold #2E8DB5")
-            telemetry.append("preset ", style="bold #67D5FF")
-            telemetry.append(self._preset().value, style="bold #FFD67A")
-            telemetry.append("  ||  ", style="bold #2E8DB5")
-            telemetry.append("last ", style="bold #67D5FF")
-            telemetry.append(self._last_action, style="bold #D8FEE3")
+            telemetry.append(f" {pulse} ", style=f"bold #0A141B on {palette['accent_soft']}")
+            telemetry.append("clock ", style=f"bold {palette['meta_label']}")
+            telemetry.append(clock, style=f"bold {palette['meta_value']}")
+            telemetry.append("  ||  ", style=f"bold {palette['separator']}")
+            telemetry.append("dataset ", style=f"bold {palette['meta_label']}")
+            telemetry.append(self._dataset_short(), style=f"bold {palette['meta_value']}")
+            telemetry.append("  ||  ", style=f"bold {palette['separator']}")
+            telemetry.append("workflow ", style=f"bold {palette['meta_label']}")
+            telemetry.append(spec.workflow_id, style=f"bold {palette['hero_title']}")
+            telemetry.append("  ||  ", style=f"bold {palette['separator']}")
+            telemetry.append("family ", style=f"bold {palette['meta_label']}")
+            telemetry.append(spec.family, style=f"bold {palette['accent_soft']}")
+            telemetry.append("  ||  ", style=f"bold {palette['separator']}")
+            telemetry.append("last ", style=f"bold {palette['meta_label']}")
+            telemetry.append(self._last_action, style=f"bold {palette['meta_value']}")
 
             hotkeys = Text(
-                " hotkeys :: [1] profile  [2] pipeline  [3] compare  [r] rerun current  [q] quit ",
-                style="bold #9EC6D6",
+                " hotkeys :: [1] run workflow  [2] latest html  [3] refresh lists  [4] load history  [5] json dump  [r] rerun  [:] command  [q] quit ",
+                style=f"bold {palette['hotkeys']}",
             )
 
-            return Panel(
-                Group(
-                    Text(self._noise_line(118, 3), style="#1A3949"),
+            renderables: list[Any] = [Text(self._noise_line(118, 3), style=palette["noise"])]
+            if self._danger_workflow():
+                skull = Text(
+                    "\n".join(
+                        [
+                            "            .ed\"\"\"\" \"\"\"$$$$be.",
+                            "          -\"           ^\"\"**$$$e.",
+                            "        .\"                   '$$$c",
+                            "       /                      \"4$$b",
+                            "      d  3                      $$$$",
+                            "      $  *                   .$$$$$$",
+                            "     .$  ^c           $$$$$e$$$$$$$$.",
+                            "     d$L  4.         4$$$$$$$$$$$$$$b",
+                        ]
+                    ),
+                    style=f"bold {palette['skull']}",
+                )
+                renderables.append(Align.left(skull))
+                renderables.append(Text(self._radar_sweep(118, 3), style=palette["accent"]))
+
+            renderables.extend(
+                [
                     Align.left(banner),
                     Text(""),
                     Align.left(telemetry),
                     Align.left(hotkeys),
-                    Text(self._noise_line(118, 6), style="#1A3949"),
-                ),
-                title="[bold #FFD67A]TERMINAL MONITOR[/]",
-                border_style="#1E6B8F",
+                    Text(self._noise_line(118, 6), style=palette["noise"]),
+                ]
+            )
+
+            return Panel(
+                Group(*renderables),
+                title=f"[bold {palette['hero_title']}]{'THREAT MONITOR' if self._danger_workflow() else 'TERMINAL MONITOR'}[/]",
+                border_style=palette["hero_border"],
                 box=box.DOUBLE,
             )
 
         def _build_status_panel(self) -> Panel:
-            theme = self.STATUS_THEME[self._status_state]
+            theme = self._status_theme_map()[self._status_state]
             pulse = "|/-\\"[self._tick % 4] if self._status_state == "running" else "+"
             line = Text()
             line.append(f" {pulse} ", style=f"bold {theme['bg']} on {theme['fg']}")
@@ -380,316 +627,612 @@ def launch_tui(default_dataset: Path) -> None:
             return Panel(line, title="[bold]STATUS BAR[/]", border_style=theme["border"], box=box.HEAVY)
 
         def _build_control_header(self) -> Panel:
+            palette = self._palette()
             text = Text()
-            text.append("COMMAND PANEL\n", style="bold #74F0B8")
-            text.append("configure dataset / profile / preset\n", style="#D8FEE3")
-            text.append("then fire with buttons or hotkeys", style="#87B7C8")
-            return Panel(text, border_style="#23536C", box=box.HEAVY)
+            text.append("CONTROL CARTRIDGES\n", style=f"bold {palette['accent_soft']}")
+            text.append("workflow | variant | preset | budget\n", style=palette["meta_value"])
+            text.append("html | history | wheel / PgUp / PgDn = scroll", style=palette["hotkeys"])
+            return Panel(text, border_style=palette["artifact_border"], box=box.HEAVY)
 
         def _build_help_panel(self) -> Panel:
+            palette = self._palette()
             text = Text()
-            text.append("OPERATOR NOTES\n\n", style="bold #74F0B8")
-            text.append("1  PROFILE      ", style="bold #DDF8FF")
-            text.append("dataset shape + warnings\n", style="#87B7C8")
-            text.append("2  RUN PIPELINE ", style="bold #E3FFE9")
-            text.append("metrics for current profile/preset\n", style="#87B7C8")
-            text.append("3  COMPARE      ", style="bold #FFE0AF")
-            text.append("safe vs full delta on same split\n", style="#87B7C8")
-            text.append("R  RERUN        ", style="bold #E2DCFF")
-            text.append("run current controls again\n", style="#87B7C8")
-            text.append(":  COMMAND      ", style="bold #E6DDFF")
-            text.append("open palette, type :help for commands\n\n", style="#87B7C8")
-            text.append("safe     ", style="bold #93F5C6")
+            text.append("OPERATOR NOTES\n\n", style=f"bold {palette['accent_soft']}")
+            text.append("1  RUN WORKFLOW    ", style="bold #E3FFE9")
+            text.append("run current workflow selection\n", style="#87B7C8")
+            text.append("2  OPEN LATEST     ", style="bold #FFE0AF")
+            text.append("open newest html artifact\n", style="#87B7C8")
+            text.append("3  OPEN SELECTED   ", style="bold #DDF8FF")
+            text.append("open file chosen in picker\n", style="#87B7C8")
+            text.append("4  LOAD HISTORY    ", style="bold #FFE7DD")
+            text.append("render saved json artifact without rerunning\n", style="#87B7C8")
+            text.append("5  JSON DUMP       ", style="bold #D7EEFF")
+            text.append("toggle raw json channel with line numbers\n", style="#87B7C8")
+            text.append("R  RERUN           ", style="bold #E2DCFF")
+            text.append("repeat previous workflow\n", style="#87B7C8")
+            text.append(":  COMMAND         ", style="bold #E6DDFF")
+            text.append("set workflow / variant / preset / budget\n\n", style="#87B7C8")
+            text.append("A / safe     ", style="bold #93F5C6")
             text.append("reduced leakage risk\n", style="#87B7C8")
-            text.append("research ", style="bold #FFD67A")
-            text.append("adds GAM + rust metadata\n", style="#87B7C8")
-            return Panel(text, title="[bold]NOTES[/]", border_style="#1C394A", box=box.HEAVY)
+            text.append("B / full     ", style="bold #FFD67A")
+            text.append("full feature research mode\n", style="#87B7C8")
+            text.append("auto budget  ", style="bold #67D5FF")
+            text.append("maps train budget to max_iter / iterations / n_splines\n", style="#87B7C8")
+            text.append("PgUp / PgDn  ", style=f"bold {palette['hero_title']}")
+            text.append("scroll sidebar and telemetry stack", style="#87B7C8")
+            return Panel(text, title="[bold]NOTES[/]", border_style=palette["sidebar_border"], box=box.HEAVY)
 
         def _build_idle_output(self) -> Group:
+            palette = self._palette()
             text = Text()
-            text.append("SYSTEM READY\n\n", style="bold #93F5C6")
-            text.append("no report rendered yet\n\n", style="#D8FEE3")
-            text.append("> press 1 to inspect dataset profile\n", style="#67D5FF")
-            text.append("> press 2 to run pipeline with current controls\n", style="#67D5FF")
-            text.append("> press 3 to compare safe vs full\n", style="#67D5FF")
-            text.append("> press r to rerun pipeline with current profile/preset\n", style="#B9A7FF")
+            text.append("SYSTEM READY\n\n", style=f"bold {palette['accent_soft']}")
+            text.append("telemetry modules will stack here after the first workflow run\n\n", style=palette["meta_value"])
+            text.append("> choose workflow then press 1 to run\n", style=palette["meta_label"])
+            text.append("> press 2 to open latest html artifact\n", style=palette["meta_label"])
+            text.append("> press 3 to open selected html file\n", style=palette["meta_label"])
+            text.append("> press 4 to load selected json history artifact\n", style=palette["meta_label"])
+            text.append("> press 5 to toggle forensic json dump for current result\n", style=palette["meta_label"])
+            text.append("> press r to rerun previous workflow\n", style=palette["delta_border"])
             text.append("> press : to open command palette\n", style="#E0B8FF")
-            text.append("> type :help to list supported commands\n", style="#E0B8FF")
+            text.append("> use PgUp / PgDn to scroll long control stacks and output modules\n", style=palette["hotkeys"])
             return self._wrap_with_scanlines(
-                Panel(text, title="[bold]OUTPUT[/]", border_style="#1E6B8F", box=box.DOUBLE)
+                Panel(
+                    Group(
+                        Text(self._grid_line(96, 1), style=palette["grid"]),
+                        Text(self._radar_sweep(96, 2), style=palette["accent"]),
+                        text,
+                        Text(self._grid_line(96, 4), style=palette["grid"]),
+                    ),
+                    title="[bold]OUTPUT[/]",
+                    border_style=palette["output_border"],
+                    box=box.DOUBLE,
+                )
             )
 
         def _build_boot_log(self, visible_count: int | None = None) -> Group:
+            palette = self._palette()
             visible = visible_count if visible_count is not None else len(self._boot_lines)
             lines = self._boot_lines[:visible]
-            if visible >= len(self._boot_lines):
-                lines.append("[09] operator shell attached")
+            if visible < len(self._boot_lines):
+                lines.append(f"[..] sync {visible:02d}/{len(self._boot_lines):02d}")
             else:
-                lines.append(f"[..] loading module {visible:02d}/{len(self._boot_lines):02d}")
-            text = Text("\n".join(lines), style="#9DEFC8")
-            return self._wrap_with_scanlines(
-                Panel(text, title="[bold]BOOT LOG[/]", border_style="#43D17A", box=box.DOUBLE)
-            )
-
-        def _build_placeholder(self, title: str, message: str) -> Group:
+                lines.append("[09] threat posture elevated")
+            text = Text("\n".join(lines), style=palette["accent_soft"])
             return self._wrap_with_scanlines(
                 Panel(
-                    Text(message, style="bold #FFD67A"),
-                    title=f"[bold]{title}[/]",
-                    border_style="#E7A93F",
-                    box=box.HEAVY,
+                    Group(
+                        Text(self._radar_sweep(96, 7), style=palette["accent"]),
+                        text,
+                    ),
+                    title="[bold]BOOT LOG[/]",
+                    border_style=palette["accent"],
+                    box=box.DOUBLE,
                 )
             )
 
-        def _kv_table(self, title: str, rows: list[tuple[str, str]], border: str) -> Panel:
-            table = Table(box=box.HEAVY, border_style=border, show_header=False, expand=True)
-            table.add_column("key", style="bold #67D5FF", width=24)
-            table.add_column("value", style="#D8FEE3")
-            for key, value in rows:
-                table.add_row(key, value)
-            return Panel(table, title=f"[bold]{title}[/]", border_style=border, box=box.DOUBLE)
-
-        def _build_profile_output(self, report: Any) -> Group:
-            renderables: list[Any] = [
-                self._kv_table(
-                    "DATASET PROFILE",
-                    [
-                        ("rows", f"{report.summary['rows']:,}"),
-                        ("cols", str(report.summary["cols"])),
-                        ("positive_rate", f"{report.summary['target_positive_rate']}%"),
-                        ("cache", "used" if report.summary["loaded_from_cache"] else "fresh load"),
-                    ],
-                    "#1E6B8F",
-                ),
-                self._kv_table(
-                    "SELECTED COLUMNS",
-                    [
-                        ("safe", ", ".join(report.summary["selected_columns_safe"])),
-                        ("full", ", ".join(report.summary["selected_columns_full"])),
-                    ],
-                    "#23536C",
-                ),
-            ]
-            if report.warnings:
-                warning_text = Text("\n".join(f"- {warning}" for warning in report.warnings), style="#FFD2A6")
-                renderables.append(
-                    Panel(warning_text, title="[bold]WARNINGS[/]", border_style="#E0A95A", box=box.HEAVY)
-                )
-            return self._wrap_with_scanlines(*renderables)
-
-        def _model_metric_panel(self, model_name: str, result: Any) -> Panel:
-            rows = [
-                (
-                    "roc_auc",
-                    f"{self._metric_pair(result.oof.get('roc_auc'), result.holdout.get('roc_auc'))} | {self._sparkline([result.oof.get('roc_auc'), result.holdout.get('roc_auc')])}",
-                ),
-                (
-                    "pr_auc",
-                    f"{self._metric_pair(result.oof.get('pr_auc'), result.holdout.get('pr_auc'))} | {self._sparkline([result.oof.get('pr_auc'), result.holdout.get('pr_auc')])}",
-                ),
-                (
-                    "f1",
-                    f"{self._metric_pair(result.oof.get('f1'), result.holdout.get('f1'))} | {self._sparkline([result.oof.get('f1'), result.holdout.get('f1')])}",
-                ),
-                (
-                    "recall",
-                    f"{self._metric_pair(result.oof.get('recall'), result.holdout.get('recall'))} | {self._sparkline([result.oof.get('recall'), result.holdout.get('recall')])}",
-                ),
-                (
-                    "precision",
-                    f"{self._metric_pair(result.oof.get('precision'), result.holdout.get('precision'))} | {self._sparkline([result.oof.get('precision'), result.holdout.get('precision')])}",
-                ),
-                (
-                    "brier_score",
-                    f"{self._metric_pair(result.oof.get('brier_score'), result.holdout.get('brier_score'))} | {self._sparkline([result.oof.get('brier_score'), result.holdout.get('brier_score')])}",
-                ),
-            ]
-            if result.metadata.get("engine"):
-                rows.append(("engine", str(result.metadata["engine"])))
-            table = Table(box=box.HEAVY, border_style="#1E6B8F", show_header=False, expand=True)
-            table.add_column("metric", style="bold #67D5FF", width=18)
-            table.add_column("value", style="#D8FEE3")
-            for key, value in rows:
-                table.add_row(key, value)
-
-            renderables: list[Any] = [table]
-            if result.feature_importance:
-                top = Table(box=box.HEAVY, border_style="#43D17A", show_header=False, expand=True)
-                top.add_column("feature", style="bold #93F5C6", width=28)
-                top.add_column("signal", style="#D8FEE3")
-                for row in result.feature_importance[:6]:
-                    signal = row.get(
-                        "importance",
-                        row.get(
-                            "abs_coefficient",
-                            row.get("variance_importance", row.get("coefficient")),
-                        ),
-                    )
-                    top.add_row(str(row["feature"]), self._format_value(signal))
-                renderables.append(top)
-
-            return Panel(Group(*renderables), title=f"[bold]{model_name.upper()}[/]", border_style="#1E6B8F", box=box.DOUBLE)
-
-        def _build_run_output(self, report: Any) -> Group:
-            renderables: list[Any] = [
-                self._kv_table(
-                    "RUN CONFIG",
-                    [
-                        ("profile", report.config["profile"]),
-                        ("preset", report.config["preset"]),
-                        ("models", ", ".join(report.config["models"])),
-                        ("selected_columns", ", ".join(report.config["selected_columns"])),
-                    ],
-                    "#23536C",
-                )
-            ]
-
-            for model_name, result in report.models.items():
-                renderables.append(self._model_metric_panel(model_name, result))
-
-            renderables.append(
-                self._kv_table(
-                    "TIMINGS",
-                    [
-                        (
-                            key,
-                            f"{value}s | {self._sparkline([float(v) for v in report.timings.values()])}",
-                        )
-                        for key, value in report.timings.items()
-                    ],
-                    "#23536C",
-                )
-            )
-
-            if report.warnings:
-                warning_text = Text("\n".join(f"- {warning}" for warning in report.warnings), style="#FFD2A6")
-                renderables.append(
-                    Panel(warning_text, title="[bold]WARNINGS[/]", border_style="#E0A95A", box=box.HEAVY)
-                )
-
-            return self._wrap_with_scanlines(*renderables)
-
-        def _build_compare_output(self, report: Any) -> Group:
-            safe_panel = self._profile_compare_panel("SAFE", report.profiles["safe"], "#43D17A")
-            full_panel = self._profile_compare_panel("FULL", report.profiles["full"], "#E0A95A")
-
-            summary = Table(box=box.HEAVY, border_style="#1E6B8F", expand=True)
-            summary.add_column("model", style="bold #74F0B8")
-            summary.add_column("roc_auc delta", style="#FFD67A")
-            summary.add_column("f1 delta", style="#FFD67A")
-            for model_name, model_summary in report.summary.items():
-                summary.add_row(
-                    model_name,
-                    self._format_value(model_summary["roc_auc_delta_full_minus_safe"]),
-                    self._format_value(model_summary["f1_delta_full_minus_safe"]),
-                )
-
-            return self._wrap_with_scanlines(
-                self._kv_table("COMPARE CONFIG", [("preset", report.preset)], "#23536C"),
-                Columns([safe_panel, full_panel], equal=True, expand=True),
-                Panel(summary, title="[bold]DELTA SUMMARY[/]", border_style="#1E6B8F", box=box.DOUBLE),
-            )
-
-        def _profile_compare_panel(self, label: str, run_report: Any, border: str) -> Panel:
-            table = Table(box=box.HEAVY, border_style=border, show_header=False, expand=True)
+        def _telemetry_frame(self, title: str, rows: list[tuple[str, str]], border: str, *, skull: bool = False) -> Panel:
+            palette = self._palette()
+            table = Table(box=box.SIMPLE_HEAVY, border_style=border, show_header=False, expand=True)
             table.add_column("metric", style="bold #67D5FF", width=20)
-            table.add_column("value", style="#D8FEE3")
-            table.add_row("profile", run_report.config["profile"])
-            table.add_row("preset", run_report.config["preset"])
-            for model_name, result in run_report.models.items():
-                table.add_row(
-                    f"{model_name}.roc_auc",
-                    f"{self._format_value(result.holdout.get('roc_auc'))} | {self._sparkline([result.oof.get('roc_auc'), result.holdout.get('roc_auc')])}",
-                )
-                table.add_row(
-                    f"{model_name}.f1",
-                    f"{self._format_value(result.holdout.get('f1'))} | {self._sparkline([result.oof.get('f1'), result.holdout.get('f1')])}",
-                )
-                table.add_row(
-                    f"{model_name}.recall",
-                    f"{self._format_value(result.holdout.get('recall'))} | {self._sparkline([result.oof.get('recall'), result.holdout.get('recall')])}",
-                )
-            table.add_row("timing.scan", self._sparkline([float(value) for value in run_report.timings.values()]))
-            return Panel(table, title=f"[bold]{label} PANEL[/]", border_style=border, box=box.DOUBLE)
-
-        def _build_command_reference(self) -> Group:
-            table = Table(box=box.HEAVY, border_style="#7A5DFF", show_header=False, expand=True)
-            table.add_column("command", style="bold #E6DDFF", width=26)
-            table.add_column("effect", style="#D8FEE3")
-            rows = [
-                (":profile", "profile current dataset"),
-                (":run", "run current profile/preset"),
-                (":compare", "compare safe vs full"),
-                (":rerun", "repeat last action"),
-                (":set profile safe", "switch to safe profile"),
-                (":set profile full", "switch to full profile"),
-                (":set preset quick", "switch to quick preset"),
-                (":set preset research", "switch to research preset"),
-                (":set dataset <path>", "update dataset path"),
-                (":help", "show command palette reference"),
+            table.add_column("signal", style="#D8FEE3")
+            for key, value in rows:
+                table.add_row(key, value)
+            renderables: list[Any] = [
+                Text(self._grid_line(96, 2), style=palette["grid"]),
+                Text(self._radar_sweep(96, 5), style=border),
             ]
-            for command, effect in rows:
-                table.add_row(command, effect)
-            return self._wrap_with_scanlines(
-                Panel(table, title="[bold]COMMAND PALETTE[/]", border_style="#7A5DFF", box=box.DOUBLE)
+            if skull:
+                renderables.append(
+                    Text(
+                        "\n".join(
+                            [
+                                "  .-.",
+                                " (o o)",
+                                " | O \\",
+                                "  \\   \\",
+                                "   `~~~'",
+                            ]
+                        ),
+                        style=f"bold {palette['skull']}",
+                    )
+                )
+            renderables.extend([table, Text(self._grid_line(96, 5), style=palette["grid"])])
+            return Panel(
+                Group(*renderables),
+                title=f"[bold]{title}[/]",
+                border_style=border,
+                box=box.DOUBLE,
             )
 
-        def _build_error_output(self, exc: Exception) -> Group:
+        def _channel_frame(self, title: str, body: Any, border: str) -> Panel:
+            palette = self._palette()
+            return Panel(
+                Group(
+                    Text(self._grid_line(96, 3), style=palette["grid"]),
+                    Text(self._radar_sweep(96, 8), style=border),
+                    body,
+                    Text(self._grid_line(96, 9), style=palette["grid"]),
+                ),
+                title=f"[bold]{title}[/]",
+                border_style=border,
+                box=box.DOUBLE,
+            )
+
+        def _json_artifact_paths(self, result: WorkflowResult) -> list[Path]:
+            candidates: list[Path] = []
+
+            preferred_keys = {
+                "history_json",
+                "run_json",
+                "comparison_json",
+                "profile_json",
+                "summary_json",
+                "research_json",
+            }
+            for key, value in result.artifacts.items():
+                if not isinstance(value, str):
+                    continue
+                if not (key in preferred_keys or value.lower().endswith(".json")):
+                    continue
+                path = Path(value)
+                if path.exists() and path.is_file():
+                    candidates.append(path.resolve())
+
+            unique = list(dict.fromkeys(candidates))
+            priority = {
+                "history_json": 0,
+                "run_json": 1,
+                "comparison_json": 2,
+                "profile_json": 3,
+                "summary_json": 4,
+                "research_json": 5,
+            }
+            return sorted(
+                unique,
+                key=lambda path: min(
+                    (
+                        priority.get(key, 99)
+                        for key, value in result.artifacts.items()
+                        if value == str(path)
+                    ),
+                    default=99,
+                ),
+            )
+
+        def _json_channel_index(self, result: WorkflowResult, paths: list[Path]) -> Panel:
+            rows = [("json_channels", str(len(paths)))]
+            if paths:
+                rows.append(("primary", paths[0].name))
+                rows.append(("source", str(paths[0].parent)))
+            for index, path in enumerate(paths[1:4], start=2):
+                rows.append((f"alt_{index}", path.name))
+            return self._telemetry_frame("JSON CHANNEL", rows, self._palette()["artifact_border"])
+
+        def _json_dump_panel(self, path: Path) -> Panel:
+            palette = self._palette()
+            try:
+                text = path.read_text(encoding="utf-8")
+                try:
+                    parsed = json.loads(text)
+                    text = json.dumps(parsed, indent=2, ensure_ascii=False)
+                except json.JSONDecodeError:
+                    pass
+            except OSError as exc:
+                text = f"Unable to read JSON artifact: {exc}"
+
+            syntax = Syntax(
+                text,
+                "json",
+                theme="monokai",
+                line_numbers=True,
+                word_wrap=False,
+                background_color="default",
+            )
+            return self._channel_frame(f"FORENSIC JSON :: {path.name}", syntax, palette["output_border"])
+
+        def _format_signal(self, value: Any, limit: int = 88) -> str:
+            if value is None:
+                rendered = "n/a"
+            elif isinstance(value, float):
+                rendered = f"{value:.4f}"
+            elif isinstance(value, dict):
+                items = list(value.items())[:4]
+                rendered = ", ".join(f"{key}={self._format_signal(item, 18)}" for key, item in items)
+                if len(value) > 4:
+                    rendered += ", ..."
+            elif isinstance(value, (list, tuple, set)):
+                seq = list(value)
+                rendered = ", ".join(str(item) for item in seq[:6])
+                if len(seq) > 6:
+                    rendered += ", ..."
+            else:
+                rendered = str(value)
+            return rendered if len(rendered) <= limit else rendered[: limit - 3] + "..."
+
+        def _risk_spread_rows(self, report: Any) -> list[tuple[str, str]]:
+            metrics: list[tuple[str, float, float | None]] = []
+            for model_name, model in self._dict_field(report, "models").items():
+                holdout = self._dict_field(model, "holdout")
+                roc_auc = holdout.get("roc_auc")
+                f1 = holdout.get("f1")
+                if roc_auc is not None:
+                    metrics.append((model_name, float(roc_auc), float(f1) if f1 is not None else None))
+
+            if not metrics:
+                return [("status", "no model telemetry available")]
+
+            best = max(metrics, key=lambda item: item[1])
+            worst = min(metrics, key=lambda item: item[1])
+            rows = [
+                ("best_model", f"{best[0]} roc_auc={best[1]:.4f}"),
+                ("weakest_model", f"{worst[0]} roc_auc={worst[1]:.4f}"),
+                ("roc_auc_spread", f"{best[1] - worst[1]:.4f}"),
+            ]
+            if best[2] is not None:
+                rows.append(("best_model_f1", f"{best[2]:.4f}"))
+            return rows
+
+        def _compare_delta_rows(self, report: Any) -> list[tuple[str, str]]:
+            roc_candidates: list[tuple[str, float]] = []
+            f1_candidates: list[tuple[str, float]] = []
+            for model_name, summary in self._summary_dict(report).items():
+                roc_delta = summary.get("roc_auc_delta_full_minus_safe")
+                f1_delta = summary.get("f1_delta_full_minus_safe")
+                if roc_delta is not None:
+                    roc_candidates.append((model_name, float(roc_delta)))
+                if f1_delta is not None:
+                    f1_candidates.append((model_name, float(f1_delta)))
+
+            rows: list[tuple[str, str]] = []
+            if roc_candidates:
+                best_roc = max(roc_candidates, key=lambda item: item[1])
+                worst_roc = min(roc_candidates, key=lambda item: item[1])
+                rows.append(("top_roc_gain", f"{best_roc[0]} {best_roc[1]:+.4f}"))
+                rows.append(("worst_roc_drop", f"{worst_roc[0]} {worst_roc[1]:+.4f}"))
+            if f1_candidates:
+                best_f1 = max(f1_candidates, key=lambda item: item[1])
+                worst_f1 = min(f1_candidates, key=lambda item: item[1])
+                rows.append(("top_f1_gain", f"{best_f1[0]} {best_f1[1]:+.4f}"))
+                rows.append(("worst_f1_drop", f"{worst_f1[0]} {worst_f1[1]:+.4f}"))
+            return rows or [("status", "no profile delta available")]
+
+        def _build_result_output(self, result: WorkflowResult) -> Group:
+            palette = self._palette()
+            json_paths = self._json_artifact_paths(result)
+            json_renderables: list[Any] = []
+            if self._show_json_dump and json_paths:
+                json_renderables = [self._json_channel_index(result, json_paths), self._json_dump_panel(json_paths[0])]
+
+            if result.payload is not None and result.workflow_id == "profile":
+                report = result.payload
+                summary = self._summary_dict(report)
+                warnings_list = self._field(report, "warnings", [])
+                safe_columns = summary.get("selected_columns_safe", [])
+                full_columns = summary.get("selected_columns_full", [])
+                return self._wrap_with_scanlines(
+                    self._telemetry_frame(
+                        "THREAT",
+                        [
+                            ("workflow", "dataset profile"),
+                            ("rows", self._format_signal(summary.get("rows"))),
+                            ("cols", self._format_signal(summary.get("cols"))),
+                            ("positive_rate", self._format_signal(summary.get("target_positive_rate"))),
+                        ],
+                        palette["signal_border"],
+                        skull=self._danger_workflow(),
+                    ),
+                    self._telemetry_frame(
+                        "SIGNAL",
+                        [
+                            ("warnings", str(len(warnings_list))),
+                            ("safe_columns", self._format_signal(safe_columns)),
+                            ("full_columns", self._format_signal(full_columns)),
+                        ],
+                        palette["signal_border"],
+                    ),
+                    self._telemetry_frame(
+                        "RISK DELTA",
+                        [
+                            ("safe_count", str(len(safe_columns))),
+                            ("full_count", str(len(full_columns))),
+                            ("feature_delta", str(len(full_columns) - len(safe_columns))),
+                            ("artifact_keys", str(len(result.artifacts))),
+                        ],
+                        palette["delta_border"],
+                    ),
+                    self._artifact_panel(result),
+                    *json_renderables,
+                )
+            if result.payload is not None and result.workflow_id == "run":
+                report = result.payload
+                config = self._dict_field(report, "config")
+                split = self._dict_field(report, "split")
+                signal_rows: list[tuple[str, str]] = []
+                for model_name, model in self._dict_field(report, "models").items():
+                    holdout = self._dict_field(model, "holdout")
+                    signal_rows.append(
+                        (
+                            model_name,
+                            f"roc_auc={self._format_signal(holdout.get('roc_auc'), 16)}"
+                            f" | f1={self._format_signal(holdout.get('f1'), 16)}",
+                        )
+                    )
+                return self._wrap_with_scanlines(
+                    self._telemetry_frame(
+                        "THREAT",
+                        [
+                            ("profile", self._format_signal(config.get("profile"))),
+                            ("preset", self._format_signal(config.get("preset"))),
+                            ("budget", self._format_signal(config.get("training_budget_mode", "default"))),
+                            ("rust_engine", self._format_signal(config.get("rust_engine"))),
+                        ],
+                        palette["signal_border"],
+                        skull=self._danger_workflow(),
+                    ),
+                    self._telemetry_frame(
+                        "SIGNAL",
+                        signal_rows
+                        + [
+                            ("resolved", self._format_signal(config.get("resolved_training_params", {}))),
+                            ("test_positive_rate", self._format_signal(split.get("test_positive_rate"))),
+                        ],
+                        palette["signal_border"],
+                    ),
+                    self._telemetry_frame("RISK DELTA", self._risk_spread_rows(report), palette["delta_border"]),
+                    self._artifact_panel(result),
+                    *json_renderables,
+                )
+            if result.payload is not None and result.workflow_id == "compare":
+                report = result.payload
+                summary = self._summary_dict(report)
+                dataset = self._dict_field(report, "dataset")
+                split = self._dict_field(report, "split")
+                signal_rows = [
+                    (
+                        model_name,
+                        "safe "
+                        f"{self._format_signal(model_summary.get('safe_roc_auc'), 12)} -> "
+                        f"full {self._format_signal(model_summary.get('full_roc_auc'), 12)}"
+                        " | f1 "
+                        f"{self._format_signal(model_summary.get('safe_f1'), 12)} -> "
+                        f"{self._format_signal(model_summary.get('full_f1'), 12)}",
+                    )
+                    for model_name, model_summary in summary.items()
+                ]
+                return self._wrap_with_scanlines(
+                    self._telemetry_frame(
+                        "THREAT",
+                        [
+                            ("preset", self._format_signal(self._field(report, "preset", "quick"))),
+                            ("rows", self._format_signal(dataset.get("rows"))),
+                            ("train_size", self._format_signal(split.get("train_size"))),
+                            ("test_size", self._format_signal(split.get("test_size"))),
+                        ],
+                        palette["signal_border"],
+                        skull=self._danger_workflow(),
+                    ),
+                    self._telemetry_frame("SIGNAL", signal_rows or [("status", "no compare signal")], palette["signal_border"]),
+                    self._telemetry_frame("RISK DELTA", self._compare_delta_rows(report), palette["delta_border"]),
+                    self._artifact_panel(result),
+                    *json_renderables,
+                )
+
+            text = Text()
+            if result.summary:
+                for key, value in result.summary.items():
+                    text.append(f"{key}: {self._format_signal(value)}\n", style=palette["meta_value"])
+            if result.transcript:
+                text.append("\n" + result.transcript[-5000:], style=palette["meta_value"])
             return self._wrap_with_scanlines(
-                Panel(
-                    Text(str(exc), style="bold #FF9FA4"),
-                    title="[bold]ERROR[/]",
-                    border_style="#E05D5D",
-                    box=box.HEAVY,
+                self._telemetry_frame(
+                    "THREAT",
+                    [
+                        ("workflow", result.workflow_id),
+                        ("family", result.family),
+                        ("summary_fields", str(len(result.summary))),
+                        ("html_channels", str(len(result.html_artifacts))),
+                    ],
+                    palette["signal_border"],
+                    skull=self._danger_workflow(),
+                ),
+                self._telemetry_frame(
+                    "SIGNAL",
+                    [(str(key), self._format_signal(value)) for key, value in list(result.summary.items())[:6]]
+                    or [("status", "legacy transcript captured")],
+                    palette["signal_border"],
+                ),
+                self._telemetry_frame(
+                    "RISK DELTA",
+                    [
+                        ("artifacts", str(len(result.artifacts))),
+                        ("transcript_chars", str(len(result.transcript))),
+                        ("transcript_lines", str(len(result.transcript.splitlines()))),
+                    ],
+                    palette["delta_border"],
+                ),
+                self._artifact_panel(result),
+                self._channel_frame(
+                    "SIGNAL TRACE",
+                    text or Text("No transcript captured.", style=palette["meta_value"]),
+                    palette["output_border"],
+                ),
+                *json_renderables,
+            )
+
+        def _artifact_panel(self, result: WorkflowResult) -> Panel:
+            palette = self._palette()
+            table = Table(box=box.SIMPLE_HEAVY, border_style=palette["artifact_border"], show_header=False, expand=True)
+            table.add_column("key", style="bold #67D5FF", width=18)
+            table.add_column("value", style="#D8FEE3")
+            for key, value in result.artifacts.items():
+                table.add_row(str(key), str(value))
+            for html_path in result.html_artifacts[:6]:
+                table.add_row("html", html_path)
+            if not result.artifacts and not result.html_artifacts:
+                table.add_row("status", "no artifact channel data yet")
+            return Panel(
+                Group(
+                    Text(self._grid_line(96, 8), style=palette["grid"]),
+                    Text(self._radar_sweep(96, 11), style=palette["artifact_border"]),
+                    table,
+                    Text(self._grid_line(96, 12), style=palette["grid"]),
+                ),
+                title="[bold]ARTIFACT CHANNEL[/]",
+                border_style=palette["artifact_border"],
+                box=box.DOUBLE,
+            )
+
+        def _refresh_html_options(self) -> None:
+            html_files = scan_html_artifacts()
+            self._last_html = [str(path) for path in html_files[:25]]
+            select = self.query_one("#html_pick", Select)
+            options = [("select html artifact", "")]
+            options.extend((Path(path).name, path) for path in self._last_html)
+            select.set_options(options)
+            if self._last_html:
+                select.value = self._last_html[0]
+
+        def _refresh_history_options(self) -> None:
+            history_files = scan_json_artifacts()
+            self._last_json = [str(path) for path in history_files[:25]]
+            select = self.query_one("#history_pick", Select)
+            options = [("select json history", "")]
+            options.extend((describe_json_artifact(path), path) for path in self._last_json)
+            select.set_options(options)
+            if self._last_json:
+                select.value = self._last_json[0]
+
+        def _sync_controls_from_history(self, result: WorkflowResult) -> None:
+            if result.workflow_id in WORKFLOW_SPECS:
+                self.query_one("#workflow", Select).value = result.workflow_id
+
+            payload = result.payload
+            if payload is None:
+                return
+
+            if result.workflow_id == "run":
+                config = self._dict_field(payload, "config")
+                dataset = self._dict_field(payload, "dataset")
+                profile = str(config.get("profile", "safe"))
+                self.query_one("#variant", Select).value = "A" if profile == "safe" else "B"
+                preset = str(config.get("preset", "quick"))
+                if preset in {"quick", "research"}:
+                    self.query_one("#preset", Select).value = preset
+                budget = str(config.get("training_budget_mode", "default"))
+                if budget in {"default", "auto"}:
+                    self.query_one("#budget", Select).value = budget
+                dataset_path = dataset.get("path")
+                if dataset_path:
+                    self.query_one("#dataset", Input).value = str(dataset_path)
+
+            elif result.workflow_id == "compare":
+                preset = str(self._field(payload, "preset", "quick"))
+                if preset in {"quick", "research"}:
+                    self.query_one("#preset", Select).value = preset
+                dataset = self._dict_field(payload, "dataset")
+                dataset_path = dataset.get("path")
+                if dataset_path:
+                    self.query_one("#dataset", Input).value = str(dataset_path)
+
+        def _load_history(self, path: str) -> None:
+            if not path:
+                self._set_status("error", "no history json selected")
+                return
+            try:
+                result = load_history_result(path)
+            except Exception as exc:  # pragma: no cover - interactive path
+                self._set_status("error", str(exc))
+                return
+
+            self._last_result = result
+            self._last_action = f"history:{Path(path).stem}"
+            self._show_json_dump = True
+            self._sync_controls_from_history(result)
+            self._set_output(self._build_result_output(result))
+            self._set_status("success", f"history loaded: {Path(path).name}")
+
+        def _validate_request(self) -> WorkflowRequest | None:
+            request = self._request()
+            if not request.dataset_path:
+                self._set_status("error", "dataset path is empty")
+                self._set_output(
+                    self._wrap_with_scanlines(
+                        Panel(
+                            Text("Dataset path is empty.", style="bold #FF9FA4"),
+                            title="[bold]ERROR[/]",
+                            border_style="#E05D5D",
+                            box=box.HEAVY,
+                        )
+                    )
+                )
+                return None
+            return request
+
+        def _start_workflow(self) -> None:
+            request = self._validate_request()
+            if request is None:
+                return
+            self._last_request = request
+            self._last_action = request.workflow_id
+            self._set_status("running", f"running {request.workflow_id}")
+            self._set_output(
+                self._wrap_with_scanlines(
+                    Panel(
+                        Text(f"running {request.workflow_id} ...", style="bold #FFD67A"),
+                        title="[bold]WORKFLOW[/]",
+                        border_style="#E7A93F",
+                        box=box.HEAVY,
+                    )
                 )
             )
+            self._workflow_worker(request)
 
-        def _validate_dataset(self) -> str | None:
-            dataset_path = self._dataset()
-            if not dataset_path:
-                self._set_status("error", "dataset path is empty")
-                self._set_output(self._build_error_output(ValueError("Dataset path is empty.")))
-                return None
-            return dataset_path
+        def action_run_current(self) -> None:
+            self._start_workflow()
 
-        def _start_profile(self) -> None:
-            dataset_path = self._validate_dataset()
-            if dataset_path is None:
+        def action_rerun_current(self) -> None:
+            if self._last_request is None:
+                self._start_workflow()
                 return
-            self._last_action = "profile"
-            self._last_action_mode = "profile"
-            self._set_status("running", f"profiling {Path(dataset_path).name}")
-            self._set_output(self._build_placeholder("PROFILE", "collecting shape, columns, and leakage warnings ..."))
-            self._profile_worker(dataset_path, self._export_html())
+            self._last_action = self._last_request.workflow_id
+            self._set_status("running", f"rerunning {self._last_request.workflow_id}")
+            self._workflow_worker(self._last_request)
 
-        def _start_run(self) -> None:
-            dataset_path = self._validate_dataset()
-            if dataset_path is None:
+        def action_open_latest(self) -> None:
+            target = latest_html_artifact(self._last_result.html_artifacts if self._last_result else self._last_html)
+            if target is None:
+                self._set_status("error", "no html artifact available")
                 return
-            self._last_action = f"run:{self._profile().value}/{self._preset().value}"
-            self._last_action_mode = "run"
-            self._set_status("running", f"pipeline profile={self._profile().value} preset={self._preset().value}")
-            self._set_output(self._build_placeholder("PIPELINE", "training models and building monitor report ..."))
-            self._run_worker(dataset_path, self._profile(), self._preset())
-
-        def _start_compare(self) -> None:
-            dataset_path = self._validate_dataset()
-            if dataset_path is None:
+            try:
+                open_html_artifact(target)
+            except Exception as exc:  # pragma: no cover - interactive path
+                self._set_status("error", str(exc))
                 return
-            self._last_action = f"compare:{self._preset().value}"
-            self._last_action_mode = "compare"
-            self._set_status("running", "comparing safe vs full")
-            self._set_output(self._build_placeholder("COMPARE", "running same split across both profiles ..."))
-            self._compare_worker(dataset_path, self._preset())
+            self._last_action = f"open:{Path(target).name}"
+            self._set_status("success", f"opened {Path(target).name}")
 
-        def action_run_profile(self) -> None:
-            self._start_profile()
+        def action_refresh_html(self) -> None:
+            self._refresh_html_options()
+            self._refresh_history_options()
+            self._last_action = "refresh-html"
+            self._set_status("success", f"refreshed {len(self._last_html)} html and {len(self._last_json)} json artifacts")
 
-        def action_run_pipeline_hotkey(self) -> None:
-            self._start_run()
+        def action_load_history(self) -> None:
+            target = self.query_one("#history_pick", Select).value
+            if not target:
+                target = latest_json_artifact(self._last_json)
+            if not target:
+                self._set_status("error", "no history json available")
+                return
+            self._load_history(str(target))
 
-        def action_run_compare(self) -> None:
-            self._start_compare()
+        def action_toggle_json_dump(self) -> None:
+            self._show_json_dump = not self._show_json_dump
+            if self._last_result is not None:
+                self._set_output(self._build_result_output(self._last_result))
+            else:
+                self._set_output(self._build_idle_output())
+            self._set_status("success", f"json dump {'enabled' if self._show_json_dump else 'hidden'}")
 
         def action_toggle_command_palette(self) -> None:
             cmdline = self.query_one("#cmdline", Input)
@@ -702,66 +1245,116 @@ def launch_tui(default_dataset: Path) -> None:
                 self.set_focus(None)
                 self._set_status("ready", "command palette closed")
 
-        def action_rerun_current(self) -> None:
-            if self._last_action_mode == "profile":
-                self._start_profile()
-            elif self._last_action_mode == "compare":
-                self._start_compare()
-            else:
-                self._start_run()
-
         def on_button_pressed(self, event: Button.Pressed) -> None:
-            if event.button.id == "profile_btn":
-                self._start_profile()
-            elif event.button.id == "run_btn":
-                self._start_run()
-            elif event.button.id == "compare_btn":
-                self._start_compare()
+            if event.button.id == "run_btn":
+                self._start_workflow()
+            elif event.button.id == "open_latest_btn":
+                self.action_open_latest()
+            elif event.button.id == "open_selected_btn":
+                self._open_selected_html()
+            elif event.button.id == "load_history_btn":
+                self.action_load_history()
             elif event.button.id == "rerun_btn":
                 self.action_rerun_current()
+            elif event.button.id == "refresh_btn":
+                self.action_refresh_html()
+
+        def _open_selected_html(self) -> None:
+            value = self.query_one("#html_pick", Select).value
+            if not value:
+                self._set_status("error", "no html selected")
+                return
+            try:
+                open_html_artifact(str(value))
+            except Exception as exc:  # pragma: no cover - interactive path
+                self._set_status("error", str(exc))
+                return
+            self._last_action = f"open:{Path(str(value)).name}"
+            self._set_status("success", f"opened {Path(str(value)).name}")
 
         def on_input_submitted(self, event: Input.Submitted) -> None:
             if event.input.id != "cmdline":
                 return
             command = event.value.strip()
             event.input.display = False
-            if not command or command == ":":
-                self._set_status("ready", "command palette closed")
-                return
-            self._run_command(command)
+            if command and command != ":":
+                self._run_command(command)
 
         def _run_command(self, command: str) -> None:
             normalized = command.lower().strip()
             if normalized.startswith(":"):
                 normalized = normalized[1:].strip()
 
-            if normalized in {"profile", "p"}:
-                self._start_profile()
-                return
-            if normalized in {"run", "pipeline", "2"}:
-                self._start_run()
-                return
-            if normalized in {"compare", "cmp", "3"}:
-                self._start_compare()
+            if normalized in {"run", "1"}:
+                self._start_workflow()
                 return
             if normalized in {"rerun", "repeat", "r"}:
                 self.action_rerun_current()
                 return
-            if normalized in {"help", "h", "?"}:
-                self._set_output(self._build_command_reference())
-                self._set_status("success", "command reference rendered")
+            if normalized == "html latest":
+                self.action_open_latest()
                 return
-            if normalized.startswith("set profile "):
-                value = normalized.removeprefix("set profile ").strip()
-                if value in {profile.value for profile in RunProfile}:
-                    self.query_one("#profile", Select).value = value
-                    self._set_status("success", f"profile set to {value}")
+            if normalized == "html open":
+                self._open_selected_html()
+                return
+            if normalized == "history latest":
+                target = latest_json_artifact(self._last_json)
+                if target:
+                    self._load_history(target)
+                else:
+                    self._set_status("error", "no history json available")
+                return
+            if normalized == "history load":
+                self.action_load_history()
+                return
+            if normalized in {"json", "json toggle", "json dump"}:
+                self.action_toggle_json_dump()
+                return
+            if normalized in {"json on", "json show"}:
+                if not self._show_json_dump:
+                    self.action_toggle_json_dump()
+                else:
+                    self._set_status("success", "json dump enabled")
+                return
+            if normalized in {"json off", "json hide"}:
+                if self._show_json_dump:
+                    self.action_toggle_json_dump()
+                else:
+                    self._set_status("success", "json dump hidden")
+                return
+            if normalized == "refresh html":
+                self.action_refresh_html()
+                return
+            if normalized in {"refresh history", "refresh artifacts"}:
+                self.action_refresh_html()
+                return
+            if normalized in {"help", "h", "?"}:
+                self._set_output(self._build_idle_output())
+                self._set_status("success", "help rendered")
+                return
+            if normalized.startswith("set workflow "):
+                value = normalized.removeprefix("set workflow ").strip()
+                if value in WORKFLOW_SPECS:
+                    self.query_one("#workflow", Select).value = value
+                    self._set_status("success", f"workflow set to {value}")
+                    return
+            if normalized.startswith("set variant "):
+                value = normalized.removeprefix("set variant ").strip().upper()
+                if value in {"A", "B"}:
+                    self.query_one("#variant", Select).value = value
+                    self._set_status("success", f"variant set to {value}")
                     return
             if normalized.startswith("set preset "):
                 value = normalized.removeprefix("set preset ").strip()
-                if value in {preset.value for preset in RunPreset}:
+                if value in {"quick", "research"}:
                     self.query_one("#preset", Select).value = value
                     self._set_status("success", f"preset set to {value}")
+                    return
+            if normalized.startswith("set budget "):
+                value = normalized.removeprefix("set budget ").strip()
+                if value in {"default", "auto"}:
+                    self.query_one("#budget", Select).value = value
+                    self._set_status("success", f"budget set to {value}")
                     return
             if normalized.startswith("set dataset "):
                 value = command.split(" ", 2)[2].strip() if len(command.split(" ", 2)) == 3 else ""
@@ -771,68 +1364,67 @@ def launch_tui(default_dataset: Path) -> None:
                     return
 
             self._set_status("error", f"unknown command: {command}")
+
+        def on_select_changed(self, event: Select.Changed) -> None:
+            if event.select.id != "workflow":
+                return
+            self._render_static_panels()
+            if self._last_result is not None and self._last_action != "idle":
+                self._set_output(self._build_result_output(self._last_result))
+            else:
+                self._set_output(self._build_idle_output())
+
+        def on_key(self, event: events.Key) -> None:
+            sidebar_scroll = self.query_one("#sidebar_scroll", VerticalScroll)
+            output_scroll = self.query_one("#output_scroll", VerticalScroll)
+
+            if event.key == "pageup":
+                sidebar_scroll.scroll_page_up(animate=False)
+                output_scroll.scroll_page_up(animate=False)
+                event.stop()
+            elif event.key == "pagedown":
+                sidebar_scroll.scroll_page_down(animate=False)
+                output_scroll.scroll_page_down(animate=False)
+                event.stop()
+            elif event.key == "home":
+                sidebar_scroll.scroll_home(animate=False)
+                output_scroll.scroll_home(animate=False)
+                event.stop()
+            elif event.key == "end":
+                sidebar_scroll.scroll_end(animate=False)
+                output_scroll.scroll_end(animate=False)
+                event.stop()
+
+        @work(thread=True, exclusive=True)
+        def _workflow_worker(self, request: WorkflowRequest) -> None:
+            try:
+                result = execute_workflow(request)
+                self.call_from_thread(self._workflow_done, result)
+            except Exception as exc:  # pragma: no cover - interactive path
+                self.call_from_thread(self._workflow_failed, exc)
+
+        def _workflow_done(self, result: WorkflowResult) -> None:
+            self._last_result = result
+            self._last_action = result.workflow_id
+            self._set_output(self._build_result_output(result))
+            self._refresh_html_options()
+            self._refresh_history_options()
+            self._set_status("success", f"{result.workflow_id} completed")
+            if self.query_one("#auto_open_html", Checkbox).value and result.html_artifacts:
+                self.action_open_latest()
+
+        def _workflow_failed(self, exc: Exception) -> None:
             self._set_output(
-                self._build_error_output(
-                    ValueError(
-                        "Unknown command. Try :profile, :run, :compare, :rerun, :set profile safe, :set preset research"
+                self._wrap_with_scanlines(
+                    Panel(
+                        Text(str(exc), style="bold #FF9FA4"),
+                        title="[bold]ERROR[/]",
+                        border_style="#E05D5D",
+                        box=box.HEAVY,
                     )
                 )
             )
-
-        @work(thread=True, exclusive=True)
-        def _profile_worker(self, dataset_path: str, export_html: bool) -> None:
-            try:
-                bundle = load_dataset(dataset_path)
-                report = profile_dataset(
-                    bundle=bundle,
-                    artifact_policy=ArtifactPolicy.FULL_EXPORT if export_html else ArtifactPolicy.CONSOLE_ONLY,
-                    export_html=export_html,
-                )
-                self.call_from_thread(self._profile_done, report)
-            except Exception as exc:  # pragma: no cover - interactive path
-                self.call_from_thread(self._task_failed, exc)
-
-        @work(thread=True, exclusive=True)
-        def _run_worker(self, dataset_path: str, profile: RunProfile, preset: RunPreset) -> None:
-            try:
-                bundle = load_dataset(dataset_path)
-                report = run_pipeline(
-                    bundle=bundle,
-                    profile=profile,
-                    preset=preset,
-                    artifact_policy=ArtifactPolicy.CONSOLE_ONLY,
-                )
-                self.call_from_thread(self._run_done, report)
-            except Exception as exc:  # pragma: no cover - interactive path
-                self.call_from_thread(self._task_failed, exc)
-
-        @work(thread=True, exclusive=True)
-        def _compare_worker(self, dataset_path: str, preset: RunPreset) -> None:
-            try:
-                bundle = load_dataset(dataset_path)
-                report = compare_profiles(
-                    bundle=bundle,
-                    preset=preset,
-                    artifact_policy=ArtifactPolicy.CONSOLE_ONLY,
-                )
-                self.call_from_thread(self._compare_done, report)
-            except Exception as exc:  # pragma: no cover - interactive path
-                self.call_from_thread(self._task_failed, exc)
-
-        def _profile_done(self, report: Any) -> None:
-            self._set_output(self._build_profile_output(report))
-            self._set_status("success", "dataset profile completed")
-
-        def _run_done(self, report: Any) -> None:
-            self._set_output(self._build_run_output(report))
-            self._set_status("success", "pipeline completed")
-
-        def _compare_done(self, report: Any) -> None:
-            self._set_output(self._build_compare_output(report))
-            self._set_status("success", "comparison completed")
-
-        def _task_failed(self, exc: Exception) -> None:
-            self._set_output(self._build_error_output(exc))
-            self._set_status("error", "task failed")
+            self._last_action = "error"
+            self._set_status("error", "workflow failed")
 
     DepressionTUI().run()

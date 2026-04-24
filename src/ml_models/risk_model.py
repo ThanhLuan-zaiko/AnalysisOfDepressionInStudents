@@ -37,6 +37,7 @@ from sklearn.calibration import calibration_curve, CalibratedClassifierCV
 import logging
 import json
 from datetime import datetime
+from src.training_budget import resolve_training_budget
 from src.utils import Timer
 
 logger = logging.getLogger(__name__)
@@ -90,8 +91,15 @@ class DepressionRiskModeler:
     - Không chỉ dùng accuracy (vì class imbalance)
     """
 
-    def __init__(self, random_state: int = 42):
+    def __init__(
+        self,
+        random_state: int = 42,
+        training_budget_mode: str = "default",
+        training_budget: Optional[Dict[str, Dict[str, Any]]] = None,
+    ):
         self.random_state = random_state
+        self.training_budget_mode = training_budget_mode
+        self.training_budget = training_budget.copy() if training_budget else {}
         self.models = {}
         self.results = {}
         self.preprocessors = {}
@@ -287,9 +295,8 @@ class DepressionRiskModeler:
         """
         # Class weights để xử lý imbalance
         lr = LogisticRegression(
-            
             C=C,
-            max_iter=1000,
+            max_iter=self.training_budget.get("logistic", {}).get("max_iter", 1000),
             class_weight="balanced",
             solver="lbfgs",
             random_state=self.random_state,
@@ -400,12 +407,13 @@ class DepressionRiskModeler:
 
         # Tăng n_splines từ 10 lên 15 để capture nonlinear tốt hơn
         # Với block-diagonal P-IRLS đã tối ưu, việc tăng splines không còn chậm
+        gam_budget = self.training_budget.get("gam", {})
         metrics = gam.train(
             X, y,
             feature_types=feature_types,
             feature_names=feature_names,
-            n_splines=15,
-            optimize_splines=True,
+            n_splines=gam_budget.get("n_splines", 15),
+            optimize_splines=gam_budget.get("optimize_splines", True),
         )
 
         self.models["gam"] = gam
@@ -450,15 +458,16 @@ class DepressionRiskModeler:
             class_weights = [n_samples / (2 * n_class_0), n_samples / (2 * n_class_1)]
 
             # CatBoost GPU params
+            catboost_budget = self.training_budget.get("catboost", {})
             catboost_params = {
-                "iterations": 500,
-                "depth": 6,
-                "learning_rate": 0.05,
+                "iterations": catboost_budget.get("iterations", 500),
+                "depth": catboost_budget.get("depth", 6),
+                "learning_rate": catboost_budget.get("learning_rate", 0.05),
                 "class_weights": class_weights,
                 "loss_function": "Logloss",
                 "verbose": False,
                 "random_seed": self.random_state,
-                "early_stopping_rounds": 30,
+                "early_stopping_rounds": catboost_budget.get("early_stopping_rounds", 30),
             }
 
             # Bật GPU nếu có
@@ -591,6 +600,12 @@ class DepressionRiskModeler:
 
         model = self.models[model_name]
         X, y, feature_names = self.prepare_features(df, include_suicidal=include_suicidal)
+        self.training_budget = resolve_training_budget(
+            mode=self.training_budget_mode,
+            family="legacy",
+            preset="research",
+            train_rows=len(y),
+        )
 
         y_pred_obj = model.predict_proba(X)
         if y_pred_obj.ndim == 2:
@@ -1017,6 +1032,7 @@ class DepressionRiskModeler:
         X, y, feature_names = self.prepare_features(df, include_suicidal=include_suicidal)
         print(f"     Feature matrix: {X.shape[0]} samples × {X.shape[1]} features")
         print(f"     Class distribution: {(y == 1).sum()} positive, {(y == 0).sum()} negative")
+        print(f"     Training budget: {self.training_budget_mode}")
 
         # 2. Model 0: Dummy
         with Timer("Dummy Baseline"):

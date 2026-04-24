@@ -8,6 +8,20 @@ Người mới nên bắt đầu từ `robot` thay vì gọi trực tiếp `main
 
 Nếu bạn chỉ cần nhớ thao tác bàn phím trong giao diện, xem thêm [TUI_HOTKEYS.md](./TUI_HOTKEYS.md).
 
+## Workflow Hub mới
+
+`robot` giờ dùng cùng một workflow hub cho cả TUI lẫn fallback console:
+
+- hỗ trợ cả nhánh modern và legacy trong `README.md`
+- hiển thị cấu hình `A/B`
+- hỗ trợ `training budget = default|auto`
+- có HTML picker để mở report/dashboard trên browser mặc định
+
+Quy đổi nhanh:
+
+- `A = safe = conservative`
+- `B = full = default`
+
 ## Cài nhanh
 
 Trong thư mục repo:
@@ -150,14 +164,19 @@ Nhấn `:` rồi nhập một trong các lệnh sau:
 
 ```text
 :help
-:profile
 :run
-:compare
 :rerun
-:set profile safe
-:set profile full
+:html latest
+:html open
+:refresh html
+:set workflow profile
+:set workflow analysis
+:set variant A
+:set variant B
 :set preset quick
 :set preset research
+:set budget default
+:set budget auto
 :set dataset Student_Depression_Dataset.csv
 ```
 
@@ -208,10 +227,11 @@ Nếu cần kiểm tra đường legacy:
 ```powershell
 robot
 robot profile --dataset Student_Depression_Dataset.csv --console-only
-robot run --dataset Student_Depression_Dataset.csv --profile safe --preset quick --console-only
-robot run --dataset Student_Depression_Dataset.csv --profile full --preset quick --console-only
-robot run --dataset Student_Depression_Dataset.csv --profile safe --preset research --console-only
+robot run --dataset Student_Depression_Dataset.csv --variant A --preset quick --budget auto
+robot run --dataset Student_Depression_Dataset.csv --variant B --preset quick
 robot compare --dataset Student_Depression_Dataset.csv --preset quick --console-only
+robot task analysis --dataset Student_Depression_Dataset.csv --variant A --budget auto
+robot open-html --latest
 robot-tui
 ```
 

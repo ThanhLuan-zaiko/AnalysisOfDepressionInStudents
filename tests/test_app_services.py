@@ -88,6 +88,8 @@ class AppServicesTest(unittest.TestCase):
         self.assertIn("logistic", report.models)
         self.assertIn("roc_auc", report.models["logistic"].oof)
         self.assertIn("roc_auc", report.models["logistic"].holdout)
+        self.assertEqual(report.config["training_budget_mode"], "default")
+        self.assertIn("resolved_training_params", report.config)
 
     def test_run_pipeline_full_profile_keeps_sensitive_feature(self) -> None:
         bundle = load_dataset(self.dataset_path)
@@ -109,6 +111,29 @@ class AppServicesTest(unittest.TestCase):
 
         self.assertIn("Have you ever had suicidal thoughts ?", report.config["selected_columns"])
         self.assertGreaterEqual(report.split["test_size"], 1)
+
+    def test_run_pipeline_auto_budget_records_resolved_training_params(self) -> None:
+        bundle = load_dataset(self.dataset_path)
+        config = RunConfig(
+            profile=RunProfile.SAFE,
+            preset=RunPreset.QUICK,
+            artifact_policy=ArtifactPolicy.CONSOLE_ONLY,
+            test_size=0.25,
+            cv_splits=3,
+            models=("logistic", "catboost"),
+            training_budget_mode="auto",
+        )
+        report = run_pipeline(
+            bundle=bundle,
+            profile=RunProfile.SAFE,
+            preset=RunPreset.QUICK,
+            artifact_policy=ArtifactPolicy.CONSOLE_ONLY,
+            config=config,
+        )
+
+        self.assertEqual(report.config["training_budget_mode"], "auto")
+        self.assertGreater(report.config["resolved_training_params"]["logistic"]["max_iter"], 0)
+        self.assertGreater(report.config["resolved_training_params"]["catboost"]["iterations"], 0)
 
     def test_compare_profiles_returns_same_split(self) -> None:
         bundle = load_dataset(self.dataset_path)

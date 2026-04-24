@@ -28,6 +28,8 @@ from sklearn.model_selection import StratifiedKFold, cross_val_predict, train_te
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
+from src.training_budget import resolve_training_budget
+
 from .contracts import (
     ArtifactPolicy,
     ComparisonReport,
@@ -562,6 +564,12 @@ class DepressionAnalysisService:
         y_train = y[train_idx]
         y_test = y[test_idx]
         holdout_df = bundle.frame[test_idx.tolist()]
+        cfg.resolved_training_params = resolve_training_budget(
+            mode=cfg.training_budget_mode,
+            family="modern",
+            preset=cfg.preset.value,
+            train_rows=len(train_idx),
+        )
 
         model_names = list(cfg.models) if cfg.models else self._default_models(cfg.preset)
         model_results: dict[str, ModelResult] = {}
@@ -609,6 +617,8 @@ class DepressionAnalysisService:
                 "profile": cfg.profile.value,
                 "preset": cfg.preset.value,
                 "artifact_policy": cfg.artifact_policy.value,
+                "training_budget_mode": cfg.training_budget_mode,
+                "resolved_training_params": cfg.resolved_training_params,
                 "selected_columns": selected_cols,
                 "models": model_names,
                 "rust_engine": rust_status,
@@ -763,6 +773,9 @@ class DepressionAnalysisService:
         cfg: RunConfig,
     ) -> ModelResult:
         pipeline = _build_logistic_pipeline(X_train, cfg.random_state)
+        pipeline.named_steps["model"].set_params(
+            max_iter=cfg.resolved_training_params.get("logistic", {}).get("max_iter", 1500)
+        )
         cv = StratifiedKFold(n_splits=cfg.cv_splits, shuffle=True, random_state=cfg.random_state)
         oof_scores = cross_val_predict(pipeline, X_train, y_train, cv=cv, method="predict_proba")[:, 1]
         oof_pred = (oof_scores >= 0.5).astype(int)
@@ -828,16 +841,17 @@ class DepressionAnalysisService:
         ]
         numeric_cols = [col for col in X_train.columns if col not in categorical_cols]
 
+        catboost_budget = cfg.resolved_training_params.get("catboost", {})
         params: dict[str, Any] = {
-            "iterations": 300,
-            "depth": 6,
-            "learning_rate": 0.05,
+            "iterations": catboost_budget.get("iterations", 300),
+            "depth": catboost_budget.get("depth", 6),
+            "learning_rate": catboost_budget.get("learning_rate", 0.05),
             "loss_function": "Logloss",
             "eval_metric": "AUC",
             "allow_writing_files": False,
             "verbose": False,
             "random_seed": cfg.random_state,
-            "early_stopping_rounds": 30,
+            "early_stopping_rounds": catboost_budget.get("early_stopping_rounds", 30),
         }
         if torch.cuda.is_available():
             params["task_type"] = "GPU"
@@ -934,7 +948,8 @@ class DepressionAnalysisService:
 
         rust_status = rust_status or _rust_engine_status()
         X_train_matrix, X_test_matrix, feature_names, feature_types = _build_gam_design(X_train, X_test)
-        n_splines = 12 if cfg.preset is RunPreset.RESEARCH else 10
+        gam_budget = cfg.resolved_training_params.get("gam", {})
+        n_splines = gam_budget.get("n_splines", 12 if cfg.preset is RunPreset.RESEARCH else 10)
         use_rust = bool(rust_status["available"] and len(X_train) >= MIN_RUST_GAM_ROWS)
         rust_failure = rust_status["error"]
         if rust_status["available"] and not use_rust:
@@ -945,7 +960,7 @@ class DepressionAnalysisService:
 
         def fit_and_score(use_rust: bool) -> tuple[dict[str, Any], np.ndarray]:
             gam = GAMClassifier(random_state=cfg.random_state)
-            optimize_splines = bool(use_rust and cfg.preset is RunPreset.RESEARCH)
+            optimize_splines = bool(gam_budget.get("optimize_splines", use_rust and cfg.preset is RunPreset.RESEARCH))
             gam_metrics = gam.train(
                 X_train_matrix,
                 y_train,

@@ -4,16 +4,16 @@ import argparse
 import sys
 from pathlib import Path
 
-from src.app import ArtifactPolicy, RunPreset, RunProfile, compare_profiles, load_dataset, profile_dataset, run_pipeline
-
-from .console import (
-    get_console,
-    print_banner,
-    print_comparison_report,
-    print_profile_report,
-    print_run_report,
-    print_status,
-    prompt_text,
+from .console import get_console, print_banner, print_status, print_workflow_result, prompt_text
+from .workflows import (
+    WORKFLOW_SPECS,
+    WorkflowRequest,
+    execute_workflow,
+    latest_json_artifact,
+    latest_html_artifact,
+    load_history_result,
+    list_workflow_specs,
+    open_html_artifact,
 )
 
 if sys.platform == "win32":
@@ -28,31 +28,52 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
 
     profile_parser = subparsers.add_parser("profile", help="Profile dataset and optionally export HTML EDA")
-    profile_parser.add_argument("--dataset", default="Student_Depression_Dataset.csv")
+    _add_common_args(profile_parser, include_variant=False, include_preset=False)
     profile_parser.add_argument("--full-export", action="store_true")
-    profile_parser.add_argument("--export-html", action="store_true")
-    profile_parser.add_argument("--console-only", action="store_true")
-    profile_parser.add_argument("--output-dir", default="results/app")
 
     run_parser = subparsers.add_parser("run", help="Run the modern holdout-first pipeline")
-    run_parser.add_argument("--dataset", default="Student_Depression_Dataset.csv")
-    run_parser.add_argument("--profile", choices=[profile.value for profile in RunProfile], default=RunProfile.SAFE.value)
-    run_parser.add_argument("--preset", choices=[preset.value for preset in RunPreset], default=RunPreset.QUICK.value)
-    run_parser.add_argument("--console-only", action="store_true")
-    run_parser.add_argument("--output-dir", default="results/app")
+    _add_common_args(run_parser)
 
-    compare_parser = subparsers.add_parser("compare", help="Compare safe and full profiles on the same split")
-    compare_parser.add_argument("--dataset", default="Student_Depression_Dataset.csv")
-    compare_parser.add_argument("--preset", choices=[preset.value for preset in RunPreset], default=RunPreset.QUICK.value)
-    compare_parser.add_argument("--console-only", action="store_true")
-    compare_parser.add_argument("--output-dir", default="results/app")
+    compare_parser = subparsers.add_parser("compare", help="Compare A/B on the same split")
+    _add_common_args(compare_parser, include_variant=False)
+
+    task_parser = subparsers.add_parser("task", help="Run any workflow that the TUI exposes")
+    task_parser.add_argument("workflow", choices=tuple(WORKFLOW_SPECS))
+    _add_common_args(task_parser)
+
+    html_parser = subparsers.add_parser("open-html", help="Open latest or selected HTML artifact in browser")
+    html_parser.add_argument("path", nargs="?")
+    html_parser.add_argument("--latest", action="store_true")
+
+    history_parser = subparsers.add_parser("history", help="Load saved JSON history without rerunning")
+    history_parser.add_argument("path", nargs="?")
+    history_parser.add_argument("--latest", action="store_true")
 
     return parser
 
 
-def _interactive_fallback(console: object | None) -> list[str] | None:
+def _add_common_args(
+    parser: argparse.ArgumentParser,
+    *,
+    include_variant: bool = True,
+    include_preset: bool = True,
+) -> None:
+    parser.add_argument("--dataset", default="Student_Depression_Dataset.csv")
+    if include_variant:
+        parser.add_argument("--variant", choices=("A", "B"), default="A")
+        parser.add_argument("--profile", choices=("safe", "full"), help=argparse.SUPPRESS)
+    if include_preset:
+        parser.add_argument("--preset", choices=("quick", "research"), default="quick")
+    parser.add_argument("--export-html", action="store_true")
+    parser.add_argument("--console-only", action="store_true")
+    parser.add_argument("--output-dir", default="results/app")
+    parser.add_argument("--budget", choices=("default", "auto"), default="default")
+
+
+def _interactive_fallback(console: object | None) -> int:
     print_banner(console)
-    print_status("Textual chưa được cài. Chuyển sang menu console để bạn chọn lệnh chạy.", console)
+    print_status("Textual chưa được cài. Chuyển sang menu console đồng bộ với workflow hub.", console)
+
     dataset = prompt_text(
         "Dataset [mặc định: Student_Depression_Dataset.csv]: ",
         default="Student_Depression_Dataset.csv",
@@ -60,104 +81,149 @@ def _interactive_fallback(console: object | None) -> list[str] | None:
     )
     if not Path(dataset).exists():
         print_status(f"Không tìm thấy dataset: {dataset}", console)
-        return None
+        return 1
 
-    menu_lines = [
-        "",
-        "Chọn tác vụ:",
-        "  1. Hồ sơ dữ liệu",
-        "  2. Chạy nhanh an toàn",
-        "  3. Chạy nhanh đầy đủ",
-        "  4. Chạy nghiên cứu an toàn",
-        "  5. So sánh safe và full",
-        "  0. Thoát",
-    ]
-    for line in menu_lines:
-        print_status(line, console)
+    specs = list_workflow_specs()
+    print_status("", console)
+    print_status("Chọn workflow:", console)
+    for index, spec in enumerate(specs, start=1):
+        print_status(f"  {index:>2}. {spec.label} [{spec.family}]", console)
+    print_status("   0. Thoát", console)
 
-    choice = prompt_text("Nhập lựa chọn [mặc định: 2]: ", default="2", console=console)
-    mapping = {
-        "1": ["profile", "--dataset", dataset, "--console-only"],
-        "2": ["run", "--dataset", dataset, "--profile", "safe", "--preset", "quick", "--console-only"],
-        "3": ["run", "--dataset", dataset, "--profile", "full", "--preset", "quick", "--console-only"],
-        "4": ["run", "--dataset", dataset, "--profile", "safe", "--preset", "research", "--console-only"],
-        "5": ["compare", "--dataset", dataset, "--preset", "quick", "--console-only"],
-        "0": None,
-    }
-    if choice not in mapping:
+    choice = prompt_text("Nhập lựa chọn [mặc định: 1]: ", default="1", console=console)
+    if choice == "0":
+        return 0
+    if not choice.isdigit() or int(choice) < 1 or int(choice) > len(specs):
         print_status("Lựa chọn không hợp lệ.", console)
-        return None
-    return mapping[choice]
+        return 1
+
+    spec = specs[int(choice) - 1]
+    variant = "A"
+    if spec.supports_variant:
+        variant = prompt_text("Variant [A/B, mặc định: A]: ", default="A", console=console).upper()
+        if variant not in {"A", "B"}:
+            variant = "A"
+
+    preset = spec.default_preset
+    if spec.family == "modern":
+        preset = prompt_text("Preset [quick/research, mặc định: quick]: ", default="quick", console=console)
+        if preset not in {"quick", "research"}:
+            preset = "quick"
+
+    budget = "default"
+    if spec.supports_budget:
+        budget = prompt_text("Training budget [default/auto, mặc định: default]: ", default="default", console=console)
+        if budget not in {"default", "auto"}:
+            budget = "default"
+
+    export_html = False
+    if spec.supports_export_html:
+        export_html = prompt_text("Xuất HTML? [y/N]: ", default="n", console=console).lower().startswith("y")
+
+    result = execute_workflow(
+        WorkflowRequest(
+            workflow_id=spec.workflow_id,
+            dataset_path=dataset,
+            variant=variant,
+            preset=preset,
+            export_html=export_html,
+            console_only=True,
+            training_budget_mode=budget,
+        )
+    )
+    print_workflow_result(result, console)
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     console = get_console()
     parser = build_parser()
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
-    banner_rendered = False
 
     if not raw_argv:
         tui_exit_code = run_tui([], show_banner=False, quiet_on_missing=True)
         if tui_exit_code == 0:
             return 0
-        raw_argv = _interactive_fallback(console)
-        if raw_argv is None:
-            return 0
-        banner_rendered = True
+        return _interactive_fallback(console)
 
-    if not banner_rendered:
-        print_banner(console)
+    print_banner(console)
     args = parser.parse_args(raw_argv)
 
-    if args.command is None:
-        args = parser.parse_args(["run"])
+    if args.command == "open-html":
+        target = args.path
+        if args.latest or not target:
+            target = latest_html_artifact()
+        if target is None:
+            print_status("Không tìm thấy file HTML để mở.", console)
+            return 1
+        opened = open_html_artifact(target)
+        print_status(f"Đã mở HTML: {opened}", console)
+        return 0
 
+    if args.command == "history":
+        target = args.path
+        if args.latest or not target:
+            target = latest_json_artifact()
+        if target is None:
+            print_status("KhÃ´ng tÃ¬m tháº¥y file JSON lá»‹ch sá»­ Ä‘á»ƒ xem.", console)
+            return 1
+        print_status(f"Äang xem láº¡i artifact: {target}", console)
+        result = load_history_result(target)
+        print_workflow_result(result, console)
+        return 0
+
+    request = _request_from_args(args)
+    print_status(f"Đang chạy workflow: {request.workflow_id} ...", console)
+    result = execute_workflow(request)
+    print_workflow_result(result, console)
+    return 0
+
+
+def _request_from_args(args: argparse.Namespace) -> WorkflowRequest:
     if args.command == "profile":
-        print_status(f"Đang đọc dữ liệu từ {args.dataset} ...", console)
-        bundle = load_dataset(args.dataset)
-        policy = (
-            ArtifactPolicy.CONSOLE_ONLY
-            if args.console_only
-            else (ArtifactPolicy.FULL_EXPORT if args.full_export else ArtifactPolicy.JSON)
-        )
-        report = profile_dataset(
-            bundle=bundle,
-            artifact_policy=policy,
+        return WorkflowRequest(
+            workflow_id="profile",
+            dataset_path=args.dataset,
             export_html=args.export_html,
             output_dir=args.output_dir,
+            console_only=args.console_only,
+            training_budget_mode=args.budget,
         )
-        print_profile_report(report, console)
-        return 0
-
     if args.command == "compare":
-        print_status(f"Đang đọc dữ liệu từ {args.dataset} ...", console)
-        bundle = load_dataset(args.dataset)
-        print_status("Đang so sánh profile safe và full trên cùng split ...", console)
-        report = compare_profiles(
-            bundle=bundle,
-            preset=RunPreset(args.preset),
-            artifact_policy=ArtifactPolicy.CONSOLE_ONLY if args.console_only else ArtifactPolicy.JSON,
+        return WorkflowRequest(
+            workflow_id="compare",
+            dataset_path=args.dataset,
+            preset=args.preset,
             output_dir=args.output_dir,
+            console_only=args.console_only,
+            training_budget_mode=args.budget,
         )
-        print_comparison_report(report, console)
-        return 0
+    if args.command == "task":
+        workflow_id = args.workflow
+    elif args.command == "run":
+        workflow_id = "run"
+    else:
+        workflow_id = args.command
 
-    print_status(f"Đang đọc dữ liệu từ {args.dataset} ...", console)
-    bundle = load_dataset(args.dataset)
-    print_status(
-        f"Đang chạy pipeline: profile={args.profile}, preset={args.preset} ...",
-        console,
+    return WorkflowRequest(
+        workflow_id=workflow_id,
+        dataset_path=getattr(args, "dataset", "Student_Depression_Dataset.csv"),
+        variant=_resolve_variant_arg(args),
+        preset=getattr(args, "preset", "quick"),
+        export_html=getattr(args, "export_html", False),
+        output_dir=getattr(args, "output_dir", "results/app"),
+        console_only=getattr(args, "console_only", False),
+        training_budget_mode=getattr(args, "budget", "default"),
     )
-    policy = ArtifactPolicy.CONSOLE_ONLY if args.console_only else ArtifactPolicy.JSON
-    report = run_pipeline(
-        bundle=bundle,
-        profile=RunProfile(args.profile),
-        preset=RunPreset(args.preset),
-        artifact_policy=policy,
-        output_dir=args.output_dir,
-    )
-    print_run_report(report, console)
-    return 0
+
+
+def _resolve_variant_arg(args: argparse.Namespace) -> str:
+    profile = getattr(args, "profile", None)
+    if profile == "full":
+        return "B"
+    if profile == "safe":
+        return "A"
+    return getattr(args, "variant", "A")
 
 
 def run_tui(
@@ -177,12 +243,12 @@ def run_tui(
             return 1
         if show_banner:
             print_banner(console)
-        message = 'Textual chưa được cài. Hãy dùng `robot` hoặc `robot run ...`, hoặc cài nhanh bằng `uv pip install "textual>=0.86.0"`.'
+        message = 'Textual chưa được cài. Hãy dùng `robot task ...` hoặc cài nhanh bằng `uv pip install "textual>=0.86.0"`.'
         if console is None:
             print(message)
         else:
             console.print(
-                'Textual chưa được cài. Hãy dùng [bold]robot[/] hoặc [bold]robot run ...[/], hoặc cài nhanh bằng [bold]uv pip install "textual>=0.86.0"[/].'
+                'Textual chưa được cài. Hãy dùng [bold]robot task ...[/] hoặc cài nhanh bằng [bold]uv pip install "textual>=0.86.0"[/].'
             )
         return 1
 

@@ -75,6 +75,8 @@ class RunConfig:
     artifact_policy: ArtifactPolicy = ArtifactPolicy.JSON
     output_dir: Path = Path("results/app")
     export_html: bool = False
+    training_budget_mode: str = "default"
+    resolved_training_params: dict[str, dict[str, Any]] = field(default_factory=dict)
     random_state: int = 42
     test_size: float = 0.2
     cv_splits: int = 5
