@@ -141,15 +141,37 @@ def execute_workflow(request: WorkflowRequest) -> WorkflowResult:
     return result
 
 
-def scan_html_artifacts(search_roots: tuple[Path, ...] = RESULT_DIRS) -> list[Path]:
+def scan_html_artifacts(
+    search_roots: tuple[Path, ...] = RESULT_DIRS,
+    *,
+    exclude_parts: tuple[str, ...] = ("app_cache", "test-fixtures", "__pycache__"),
+) -> list[Path]:
     html_files: list[Path] = []
     for root in search_roots:
         if not root.exists():
             continue
-        html_files.extend(path for path in root.rglob("*.html") if path.is_file())
+        for current, dirnames, filenames in os.walk(root, onerror=lambda _exc: None):
+            current_path = Path(current)
+            if exclude_parts:
+                dirnames[:] = [name for name in dirnames if name not in exclude_parts]
+            for filename in filenames:
+                if not filename.lower().endswith(".html"):
+                    continue
+                path = current_path / filename
+                if path.is_file():
+                    html_files.append(path)
+
+    unique_paths = {path.resolve() for path in html_files}
+
+    def mtime(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
     return sorted(
-        {path.resolve() for path in html_files},
-        key=lambda path: path.stat().st_mtime,
+        unique_paths,
+        key=mtime,
         reverse=True,
     )
 

@@ -7,6 +7,9 @@ Thư mục này dành cho người mới clone repo và cần chạy ứng dụn
 - Đọc [CLI_APP.md](./CLI_APP.md) để biết cách chạy ứng dụng bằng lệnh ngắn `robot`.
 - Đọc [TUI_HOTKEYS.md](./TUI_HOTKEYS.md) để thao tác nhanh trong giao diện TUI Hacker Pro.
 - Đọc [GITHUB_DOCS_QUYEN.md](./GITHUB_DOCS_QUYEN.md) để hiểu cách repo đang khóa review riêng cho thư mục `docs/`.
+- Đọc [MACHINE_LEARNING_DEEP_LEARNING.md](./MACHINE_LEARNING_DEEP_LEARNING.md) để nắm tổng quan ML/DL trong repo.
+- Đọc [HUAN_LUYEN_4_MODELS.md](./HUAN_LUYEN_4_MODELS.md) để xem cách huấn luyện 4 model chính.
+- Đọc [FAMD_KMEANS_SO_K.md](./FAMD_KMEANS_SO_K.md) để xem repo chọn số cụm `k` cho K-Means như thế nào trong phần FAMD clustering.
 
 ## Lối chạy ngắn nhất
 

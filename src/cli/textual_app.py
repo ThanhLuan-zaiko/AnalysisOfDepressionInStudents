@@ -176,6 +176,7 @@ def launch_tui(default_dataset: Path) -> None:
                             yield Select(history_options, value="", prompt="select history", id="history_pick")
                             yield Static("console log", id="log_label")
                             yield Select(log_options, value="", prompt="select log", id="log_pick")
+                            yield Static(id="artifact_hint")
                             yield Button("1  RUN WORKFLOW", id="run_btn")
                             yield Button("2  OPEN LATEST", id="open_latest_btn")
                             yield Button("3  OPEN SELECTED", id="open_selected_btn")
@@ -245,9 +246,9 @@ def launch_tui(default_dataset: Path) -> None:
             layout.styles.height = "1fr"
 
             sidebar_scroll = self.query_one("#sidebar_scroll", VerticalScroll)
-            sidebar_scroll.styles.width = 39
-            sidebar_scroll.styles.min_width = 32
-            sidebar_scroll.styles.max_width = 42
+            sidebar_scroll.styles.width = 46
+            sidebar_scroll.styles.min_width = 38
+            sidebar_scroll.styles.max_width = 56
             sidebar_scroll.styles.height = "1fr"
             sidebar_scroll.styles.margin = (0, 1, 0, 0)
             sidebar_scroll.styles.border = ("round", palette["sidebar_border"])
@@ -284,6 +285,10 @@ def launch_tui(default_dataset: Path) -> None:
             self._style_field("#dataset", palette)
             for select_id in ("#workflow", "#variant", "#preset", "#budget", "#html_pick", "#history_pick", "#log_pick"):
                 self._style_field(select_id, palette)
+
+            artifact_hint = self.query_one("#artifact_hint", Static)
+            artifact_hint.styles.margin = (0, 0, 1, 0)
+            artifact_hint.styles.width = "100%"
 
             for check_id in ("#export_html", "#auto_open_html"):
                 checkbox = self.query_one(check_id, Checkbox)
@@ -360,6 +365,17 @@ def launch_tui(default_dataset: Path) -> None:
             widget.styles.color = palette["field_fg"]
             widget.styles.margin = (0, 0, 1, 0)
             widget.styles.padding = (0, 1)
+            if isinstance(widget, Select):
+                widget.compact = True
+                widget.styles.height = 3
+                try:
+                    overlay = widget.query_one("SelectOverlay")
+                except Exception:
+                    overlay = None
+                if overlay is not None:
+                    overlay.styles.max_height = 18
+                    if selector in {"#html_pick", "#history_pick", "#log_pick"}:
+                        overlay.styles.width = 96
 
         def _palette(self) -> dict[str, str]:
             return self.PALETTES["danger"] if self._danger_workflow() else self.PALETTES["default"]
@@ -454,6 +470,7 @@ def launch_tui(default_dataset: Path) -> None:
             self.query_one("#hero", Static).update(self._build_hero())
             self.query_one("#status_bar", Static).update(self._build_status_panel())
             self.query_one("#intel_panel", Static).update(self._build_intel_panel())
+            self.query_one("#artifact_hint", Static).update(self._build_artifact_hint())
 
         def _advance_boot(self) -> None:
             if self._last_action != "idle":
@@ -937,11 +954,22 @@ def launch_tui(default_dataset: Path) -> None:
             return rows
 
         def _artifact_inventory_rows(self) -> list[tuple[str, str]]:
+            html_groups: dict[str, int] = {}
+            for path in self._last_html:
+                group = self._html_artifact_group(path)
+                html_groups[group] = html_groups.get(group, 0) + 1
             rows = [
                 ("html", f"{len(self._last_html)} indexed"),
                 ("json", f"{len(self._last_json)} indexed"),
                 ("logs", f"{len(self._last_logs)} indexed"),
             ]
+            if html_groups:
+                rows.append(
+                    (
+                        "groups",
+                        ", ".join(f"{name.lower()}={count}" for name, count in sorted(html_groups.items())),
+                    )
+                )
             if self._last_html:
                 rows.append(("latest_h", self._format_signal(Path(self._last_html[0]).name, 30)))
             if self._last_json:
@@ -949,6 +977,180 @@ def launch_tui(default_dataset: Path) -> None:
             if self._last_logs:
                 rows.append(("latest_l", self._format_signal(Path(self._last_logs[0]).name, 30)))
             return rows
+
+        def _artifact_select_label(self, path: str | Path, kind: str) -> str:
+            artifact_path = Path(path)
+            if kind == "json":
+                name = self._middle_truncate(artifact_path.name, 32)
+                try:
+                    workflow = describe_json_artifact(artifact_path).split("|")[1].strip()
+                except Exception:
+                    workflow = "json"
+                return f"{workflow}: {name}"
+            if kind == "log":
+                name = self._middle_truncate(artifact_path.name, 32)
+                try:
+                    workflow = describe_log_artifact(artifact_path).split("|")[1].strip()
+                except Exception:
+                    workflow = "log"
+                return f"{workflow}: {name}"
+            group = self._html_artifact_group(artifact_path)
+            title = self._html_artifact_title(artifact_path)
+            short_path = self._middle_truncate(self._relative_artifact_path(artifact_path), 46)
+            return f"{group:<10} | {title:<26} | {short_path}"
+
+        def _relative_artifact_path(self, path: str | Path) -> str:
+            artifact_path = Path(path).resolve()
+            try:
+                return str(artifact_path.relative_to(Path.cwd()))
+            except ValueError:
+                return str(artifact_path)
+
+        def _html_artifact_group(self, path: str | Path) -> str:
+            name = Path(path).name.lower()
+            if name.startswith("eda_"):
+                return "EDA"
+            if name == "final_report.html" or "evidence" in name or name.startswith("model_feature"):
+                return "REPORT"
+            if name in {"model_comparison.html", "calibration_curves.html", "decision_curves.html"}:
+                return "MODEL"
+            if name.startswith("fairness_"):
+                return "FAIRNESS"
+            if name.startswith("subgroup_"):
+                return "SUBGROUP"
+            if name.startswith("robustness_"):
+                return "ROBUST"
+            if name.startswith("famd_"):
+                return "FAMD"
+            if name.startswith("gam_"):
+                return "GAM"
+            return "HTML"
+
+        def _html_artifact_title(self, path: str | Path) -> str:
+            name = Path(path).stem.lower()
+            title_map = {
+                "final_report": "Final report",
+                "model_evidence_metrics": "Model evidence",
+                "model_feature_importance_safe": "Feature importance",
+                "model_comparison": "Model comparison",
+                "calibration_curves": "Calibration curves",
+                "decision_curves": "Decision curves",
+                "gam_feature_effects": "GAM effects",
+                "eda_class_imbalance": "Class imbalance",
+                "eda_missing_values": "Missing values",
+                "eda_numeric_distributions": "Numeric distributions",
+                "eda_categorical_distributions": "Categorical distributions",
+                "eda_suicidal_thoughts": "Suicidal thoughts",
+                "eda_correlation_numeric": "Numeric correlation",
+                "famd_variance_explained": "FAMD variance",
+                "famd_correlation_circle": "FAMD corr circle",
+                "famd_sample_projection": "FAMD projection",
+                "famd_clustering_report": "FAMD clustering report",
+                "famd_clusters_kmeans": "FAMD K-Means",
+                "famd_clusters_dbscan": "FAMD DBSCAN",
+            }
+            if name in title_map:
+                return self._middle_truncate(title_map[name], 26)
+            for prefix, label in (
+                ("eda_", "EDA"),
+                ("famd_contributions_", "FAMD contribution"),
+                ("famd_correlation_circle_", "FAMD corr circle"),
+                ("famd_sample_projection_", "FAMD projection"),
+                ("fairness_dashboard_", "Fairness"),
+                ("subgroup_dashboard_", "Subgroup"),
+                ("robustness_dashboard_", "Robustness"),
+            ):
+                if name.startswith(prefix):
+                    suffix = name.removeprefix(prefix).replace("_", " ")
+                    return self._middle_truncate(f"{label} {suffix}", 26)
+            return self._middle_truncate(Path(path).stem.replace("_", " ").title(), 26)
+
+        def _rank_html_artifacts(self, paths: list[Path]) -> list[Path]:
+            group_order = {
+                "REPORT": 0,
+                "EDA": 1,
+                "MODEL": 2,
+                "GAM": 3,
+                "FAIRNESS": 4,
+                "SUBGROUP": 5,
+                "ROBUST": 6,
+                "FAMD": 7,
+                "HTML": 8,
+            }
+            title_order = {
+                "final_report.html": 0,
+                "model_evidence_metrics.html": 1,
+                "model_feature_importance_safe.html": 2,
+                "eda_class_imbalance.html": 10,
+                "eda_missing_values.html": 11,
+                "eda_numeric_distributions.html": 12,
+                "eda_categorical_distributions.html": 13,
+                "eda_suicidal_thoughts.html": 14,
+                "eda_correlation_numeric.html": 15,
+                "model_comparison.html": 20,
+                "calibration_curves.html": 21,
+                "decision_curves.html": 22,
+                "gam_feature_effects.html": 30,
+                "famd_clustering_report.html": 70,
+                "famd_variance_explained.html": 71,
+                "famd_sample_projection.html": 72,
+                "famd_correlation_circle.html": 73,
+            }
+
+            def mtime(path: Path) -> float:
+                try:
+                    return path.stat().st_mtime
+                except OSError:
+                    return 0.0
+
+            return sorted(
+                paths,
+                key=lambda path: (
+                    group_order.get(self._html_artifact_group(path), 99),
+                    title_order.get(path.name.lower(), 50),
+                    -mtime(path),
+                    path.name.lower(),
+                ),
+            )
+
+        def _middle_truncate(self, value: Any, limit: int = 42) -> str:
+            rendered = str(value)
+            if len(rendered) <= limit:
+                return rendered
+            if limit <= 7:
+                return rendered[:limit]
+            head = (limit - 3) // 2
+            tail = limit - 3 - head
+            return f"{rendered[:head]}...{rendered[-tail:]}"
+
+        def _path_brief(self, value: Any, limit: int = 44) -> str:
+            if not value or value == Select.NULL:
+                return "not selected"
+            path = Path(str(value))
+            if not path.name:
+                return self._format_signal(value, limit)
+            parent = path.parent.name or str(path.parent)
+            return self._middle_truncate(f"{parent}/{path.name}", limit)
+
+        def _build_artifact_hint(self) -> Panel:
+            palette = self._palette()
+            rows = [
+                ("html", self._path_brief(self.query_one("#html_pick", Select).value)),
+                ("json", self._path_brief(self.query_one("#history_pick", Select).value)),
+                ("log", self._path_brief(self.query_one("#log_pick", Select).value)),
+            ]
+            table = Table(box=box.SIMPLE, show_header=False, expand=True, pad_edge=False)
+            table.add_column("type", style=f"bold {palette['meta_label']}", width=5, no_wrap=True)
+            table.add_column("selected", style=palette["meta_value"], ratio=1)
+            for key, value in rows:
+                table.add_row(key, value)
+            hint = Text("2 latest  3 html  4 json  6 log", style=palette["hotkeys"])
+            return Panel(
+                Group(table, hint),
+                title="[bold]SELECTED[/]",
+                border_style=palette["artifact_border"],
+                box=box.ROUNDED,
+            )
 
         def _workflow_rows(self) -> list[tuple[str, str]]:
             spec = self._selected_spec()
@@ -1219,6 +1421,159 @@ def launch_tui(default_dataset: Path) -> None:
                 rows.append(("worst_f1_drop", f"{worst_f1[0]} {worst_f1[1]:+.4f}"))
             return rows or [("status", "no profile delta available")]
 
+        def _sorted_model_items(self, report: Any) -> list[tuple[str, Any]]:
+            models = self._dict_field(report, "models")
+
+            def sort_key(item: tuple[str, Any]) -> float:
+                holdout = self._dict_field(item[1], "holdout")
+                try:
+                    return float(holdout.get("roc_auc"))
+                except (TypeError, ValueError):
+                    return -1.0
+
+            return sorted(models.items(), key=sort_key, reverse=True)
+
+        def _run_briefing_panel(self, report: Any) -> Panel:
+            palette = self._palette()
+            config = self._dict_field(report, "config")
+            dataset = self._dict_field(report, "dataset")
+            split = self._dict_field(report, "split")
+            warnings_list = self._field(report, "warnings", [])
+            models = list(self._dict_field(report, "models").keys())
+            profile = str(config.get("profile", "safe"))
+            profile_label = "A / safe" if profile == "safe" else "B / full"
+            rust_engine = config.get("rust_engine")
+            if isinstance(rust_engine, dict):
+                rust_text = "available" if rust_engine.get("available") else self._format_signal(rust_engine.get("error"), 34)
+            else:
+                rust_text = self._format_signal(rust_engine, 34)
+            return self._telemetry_frame(
+                "RUN BRIEFING",
+                [
+                    ("profile", profile_label),
+                    ("preset", self._format_signal(config.get("preset"))),
+                    ("budget", self._format_signal(config.get("training_budget_mode", "default"))),
+                    ("dataset", f"{self._format_signal(dataset.get('rows'))} rows, {self._format_signal(dataset.get('cols'))} cols"),
+                    ("split", f"train={self._format_signal(split.get('train_size'))}, test={self._format_signal(split.get('test_size'))}"),
+                    ("positive_rate", self._format_signal(split.get("test_positive_rate"))),
+                    ("models", ", ".join(models) if models else "none"),
+                    ("warnings", str(len(warnings_list)) if isinstance(warnings_list, list) else "0"),
+                    ("rust_gam", rust_text),
+                ],
+                palette["signal_border"],
+                skull=self._danger_workflow(),
+            )
+
+        def _model_note(self, model_name: str, model: Any) -> str:
+            metadata = self._dict_field(model, "metadata")
+            if model_name == "dummy":
+                return f"baseline/{metadata.get('strategy', 'prior')}"
+            if model_name == "logistic":
+                return "balanced LR"
+            if model_name == "gam":
+                engine = metadata.get("engine", "pygam")
+                splines = metadata.get("n_splines")
+                return f"{engine}, splines={splines}"
+            if model_name == "catboost":
+                return "GPU" if metadata.get("used_gpu") else "CPU"
+            return self._format_signal(metadata.get("evaluation"), 22)
+
+        def _model_scoreboard_panel(self, report: Any) -> Panel:
+            palette = self._palette()
+            table = Table(
+                box=box.SIMPLE_HEAVY,
+                border_style=palette["signal_border"],
+                show_header=True,
+                header_style=f"bold {palette['meta_label']}",
+                expand=True,
+            )
+            table.add_column("#", justify="right", width=3, no_wrap=True)
+            table.add_column("model", style=f"bold {palette['meta_value']}", width=12, no_wrap=True)
+            table.add_column("roc_auc", justify="right", no_wrap=True)
+            table.add_column("pr_auc", justify="right", no_wrap=True)
+            table.add_column("f1", justify="right", no_wrap=True)
+            table.add_column("recall", justify="right", no_wrap=True)
+            table.add_column("brier", justify="right", no_wrap=True)
+            table.add_column("threshold", justify="right", no_wrap=True)
+            table.add_column("note", ratio=1)
+
+            model_items = self._sorted_model_items(report)
+            if not model_items:
+                table.add_row("-", "none", "n/a", "n/a", "n/a", "n/a", "n/a", "n/a", "no model output")
+            for rank, (model_name, model) in enumerate(model_items, start=1):
+                holdout = self._dict_field(model, "holdout")
+                thresholds = self._dict_field(model, "thresholds")
+                best_f1 = thresholds.get("best_f1") if isinstance(thresholds.get("best_f1"), dict) else {}
+                table.add_row(
+                    str(rank),
+                    model_name,
+                    self._format_signal(holdout.get("roc_auc"), 10),
+                    self._format_signal(holdout.get("pr_auc"), 10),
+                    self._format_signal(holdout.get("f1"), 10),
+                    self._format_signal(holdout.get("recall"), 10),
+                    self._format_signal(holdout.get("brier_score"), 10),
+                    self._format_signal(best_f1.get("threshold"), 10),
+                    self._model_note(model_name, model),
+                )
+
+            caption = Text("Sorted by holdout ROC-AUC. Use this table as the opening slide for model results.", style=palette["hotkeys"])
+            return Panel(
+                Group(caption, table),
+                title="[bold]MODEL SCOREBOARD[/]",
+                border_style=palette["signal_border"],
+                box=box.DOUBLE,
+            )
+
+        def _feature_evidence(self, model: Any) -> str:
+            rows = self._field(model, "feature_importance", [])
+            if not isinstance(rows, list) or not rows:
+                return "baseline/no feature ranking"
+            snippets: list[str] = []
+            for item in rows[:3]:
+                if not isinstance(item, dict):
+                    continue
+                feature = self._format_signal(item.get("feature"), 24)
+                if "odds_ratio" in item:
+                    snippets.append(f"{feature} OR={self._format_signal(item.get('odds_ratio'), 8)}")
+                elif "importance" in item:
+                    snippets.append(f"{feature} imp={self._format_signal(item.get('importance'), 8)}")
+                elif "variance_importance" in item:
+                    snippets.append(f"{feature} var={self._format_signal(item.get('variance_importance'), 8)}")
+                else:
+                    snippets.append(feature)
+            return "; ".join(snippets) if snippets else "feature ranking unavailable"
+
+        def _model_evidence_panel(self, report: Any) -> Panel:
+            palette = self._palette()
+            table = Table(
+                box=box.SIMPLE_HEAVY,
+                border_style=palette["delta_border"],
+                show_header=True,
+                header_style=f"bold {palette['meta_label']}",
+                expand=True,
+            )
+            table.add_column("model", style=f"bold {palette['meta_value']}", width=12, no_wrap=True)
+            table.add_column("talk track", ratio=1)
+            for model_name, model in self._sorted_model_items(report):
+                holdout = self._dict_field(model, "holdout")
+                thresholds = self._dict_field(model, "thresholds")
+                best_f1 = thresholds.get("best_f1") if isinstance(thresholds.get("best_f1"), dict) else {}
+                talk_track = (
+                    f"ROC-AUC {self._format_signal(holdout.get('roc_auc'), 8)}, "
+                    f"F1 {self._format_signal(holdout.get('f1'), 8)}, "
+                    f"best-F1 threshold {self._format_signal(best_f1.get('threshold'), 8)}. "
+                    f"Evidence: {self._feature_evidence(model)}"
+                )
+                table.add_row(model_name, talk_track)
+            if not self._sorted_model_items(report):
+                table.add_row("none", "No model evidence available.")
+            return Panel(
+                table,
+                title="[bold]KEY EVIDENCE[/]",
+                border_style=palette["delta_border"],
+                box=box.DOUBLE,
+            )
+
         def _build_result_output(self, result: WorkflowResult) -> Group:
             palette = self._palette()
             json_paths = self._json_artifact_paths(result)
@@ -1239,7 +1594,7 @@ def launch_tui(default_dataset: Path) -> None:
                     benchmark_rows = analysis["benchmark_rows"]
                 return self._wrap_with_scanlines(
                     self._telemetry_frame(
-                        "THREAT",
+                        "RUN SUMMARY",
                         [
                             ("workflow", self._format_signal(result.summary.get("workflow", result.workflow_id))),
                             ("family", self._format_signal(result.summary.get("family", "legacy"))),
@@ -1250,7 +1605,7 @@ def launch_tui(default_dataset: Path) -> None:
                         skull=self._danger_workflow(),
                     ),
                     self._telemetry_frame(
-                        "SIGNAL",
+                        "CONFIG",
                         [
                             ("variant", self._format_signal(result.summary.get("variant"))),
                             ("preset", self._format_signal(result.summary.get("preset"))),
@@ -1274,7 +1629,7 @@ def launch_tui(default_dataset: Path) -> None:
                         palette["delta_border"],
                     ),
                     self._telemetry_frame(
-                        "RISK DELTA",
+                        "DIAGNOSTICS",
                         [
                             ("log_chars", str(len(result.transcript))),
                             ("log_lines", str(len(result.transcript.splitlines()))),
@@ -1294,7 +1649,7 @@ def launch_tui(default_dataset: Path) -> None:
                 full_columns = summary.get("selected_columns_full", [])
                 return self._wrap_with_scanlines(
                     self._telemetry_frame(
-                        "THREAT",
+                        "PROFILE SUMMARY",
                         [
                             ("workflow", "dataset profile"),
                             ("rows", self._format_signal(summary.get("rows"))),
@@ -1305,7 +1660,7 @@ def launch_tui(default_dataset: Path) -> None:
                         skull=self._danger_workflow(),
                     ),
                     self._telemetry_frame(
-                        "SIGNAL",
+                        "COLUMN SETS",
                         [
                             ("warnings", str(len(warnings_list))),
                             ("safe_columns", self._format_signal(safe_columns)),
@@ -1314,7 +1669,7 @@ def launch_tui(default_dataset: Path) -> None:
                         palette["signal_border"],
                     ),
                     self._telemetry_frame(
-                        "RISK DELTA",
+                        "PROFILE DELTA",
                         [
                             ("safe_count", str(len(safe_columns))),
                             ("full_count", str(len(full_columns))),
@@ -1328,40 +1683,11 @@ def launch_tui(default_dataset: Path) -> None:
                 )
             if result.payload is not None and result.workflow_id == "run":
                 report = result.payload
-                config = self._dict_field(report, "config")
-                split = self._dict_field(report, "split")
-                signal_rows: list[tuple[str, str]] = []
-                for model_name, model in self._dict_field(report, "models").items():
-                    holdout = self._dict_field(model, "holdout")
-                    signal_rows.append(
-                        (
-                            model_name,
-                            f"roc_auc={self._format_signal(holdout.get('roc_auc'), 16)}"
-                            f" | f1={self._format_signal(holdout.get('f1'), 16)}",
-                        )
-                    )
                 return self._wrap_with_scanlines(
-                    self._telemetry_frame(
-                        "THREAT",
-                        [
-                            ("profile", self._format_signal(config.get("profile"))),
-                            ("preset", self._format_signal(config.get("preset"))),
-                            ("budget", self._format_signal(config.get("training_budget_mode", "default"))),
-                            ("rust_engine", self._format_signal(config.get("rust_engine"))),
-                        ],
-                        palette["signal_border"],
-                        skull=self._danger_workflow(),
-                    ),
-                    self._telemetry_frame(
-                        "SIGNAL",
-                        signal_rows
-                        + [
-                            ("resolved", self._format_signal(config.get("resolved_training_params", {}))),
-                            ("test_positive_rate", self._format_signal(split.get("test_positive_rate"))),
-                        ],
-                        palette["signal_border"],
-                    ),
-                    self._telemetry_frame("RISK DELTA", self._risk_spread_rows(report), palette["delta_border"]),
+                    self._run_briefing_panel(report),
+                    self._model_scoreboard_panel(report),
+                    self._model_evidence_panel(report),
+                    self._telemetry_frame("MODEL SPREAD", self._risk_spread_rows(report), palette["delta_border"]),
                     self._artifact_panel(result),
                     *json_renderables,
                 )
@@ -1384,7 +1710,7 @@ def launch_tui(default_dataset: Path) -> None:
                 ]
                 return self._wrap_with_scanlines(
                     self._telemetry_frame(
-                        "THREAT",
+                        "COMPARE SUMMARY",
                         [
                             ("preset", self._format_signal(self._field(report, "preset", "quick"))),
                             ("rows", self._format_signal(dataset.get("rows"))),
@@ -1394,8 +1720,8 @@ def launch_tui(default_dataset: Path) -> None:
                         palette["signal_border"],
                         skull=self._danger_workflow(),
                     ),
-                    self._telemetry_frame("SIGNAL", signal_rows or [("status", "no compare signal")], palette["signal_border"]),
-                    self._telemetry_frame("RISK DELTA", self._compare_delta_rows(report), palette["delta_border"]),
+                    self._telemetry_frame("A/B SCOREBOARD", signal_rows or [("status", "no compare signal")], palette["signal_border"]),
+                    self._telemetry_frame("A/B DELTA", self._compare_delta_rows(report), palette["delta_border"]),
                     self._artifact_panel(result),
                     *json_renderables,
                 )
@@ -1408,7 +1734,7 @@ def launch_tui(default_dataset: Path) -> None:
                 text.append("\n" + result.transcript[-5000:], style=palette["meta_value"])
             return self._wrap_with_scanlines(
                 self._telemetry_frame(
-                    "THREAT",
+                    "RUN SUMMARY",
                     [
                         ("workflow", result.workflow_id),
                         ("family", result.family),
@@ -1419,13 +1745,13 @@ def launch_tui(default_dataset: Path) -> None:
                     skull=self._danger_workflow(),
                 ),
                 self._telemetry_frame(
-                    "SIGNAL",
+                    "KEY SIGNALS",
                     [(str(key), self._format_signal(value)) for key, value in list(result.summary.items())[:6]]
                     or [("status", "legacy transcript captured")],
                     palette["signal_border"],
                 ),
                 self._telemetry_frame(
-                    "RISK DELTA",
+                    "DIAGNOSTICS",
                     [
                         ("artifacts", str(len(result.artifacts))),
                         ("transcript_chars", str(len(result.transcript))),
@@ -1435,7 +1761,7 @@ def launch_tui(default_dataset: Path) -> None:
                 ),
                 self._artifact_panel(result),
                 self._channel_frame(
-                    "SIGNAL TRACE",
+                    "DETAIL TRACE",
                     text or Text("No transcript captured.", style=palette["meta_value"]),
                     palette["output_border"],
                 ),
@@ -1444,15 +1770,27 @@ def launch_tui(default_dataset: Path) -> None:
 
         def _artifact_panel(self, result: WorkflowResult) -> Panel:
             palette = self._palette()
-            table = Table(box=box.SIMPLE_HEAVY, border_style=palette["artifact_border"], show_header=False, expand=True)
-            table.add_column("key", style="bold #67D5FF", width=18)
-            table.add_column("value", style="#D8FEE3")
-            for key, value in result.artifacts.items():
-                table.add_row(str(key), str(value))
-            for html_path in result.html_artifacts[:6]:
-                table.add_row("html", html_path)
+            table = Table(
+                box=box.SIMPLE_HEAVY,
+                border_style=palette["artifact_border"],
+                show_header=True,
+                header_style=f"bold {palette['meta_label']}",
+                expand=True,
+            )
+            table.add_column("type", style="bold #67D5FF", width=12, no_wrap=True)
+            table.add_column("name", style="#D8FEE3", ratio=1)
+            table.add_column("folder", style=palette["hotkeys"], ratio=1)
+            for key, value in sorted(result.artifacts.items()):
+                path = Path(str(value))
+                if path.name:
+                    table.add_row(str(key), path.name, str(path.parent))
+                else:
+                    table.add_row(str(key), self._format_signal(value, 48), "")
+            for html_path in result.html_artifacts:
+                path = Path(html_path)
+                table.add_row("html", path.name, str(path.parent))
             if not result.artifacts and not result.html_artifacts:
-                table.add_row("status", "no artifact channel data yet")
+                table.add_row("status", "no artifact channel data yet", "")
             return Panel(
                 Group(
                     Text(self._grid_line(96, 8), style=palette["grid"]),
@@ -1467,10 +1805,11 @@ def launch_tui(default_dataset: Path) -> None:
 
         def _refresh_html_options(self) -> None:
             html_files = scan_html_artifacts()
-            self._last_html = [str(path) for path in html_files[:25]]
+            ranked_html = self._rank_html_artifacts(html_files)
+            self._last_html = [str(path) for path in ranked_html[:120]]
             select = self.query_one("#html_pick", Select)
             options = [("select html artifact", "")]
-            options.extend((Path(path).name, path) for path in self._last_html)
+            options.extend((self._artifact_select_label(path, "html"), path) for path in self._last_html)
             select.set_options(options)
             if self._last_html:
                 select.value = self._last_html[0]
@@ -1480,7 +1819,7 @@ def launch_tui(default_dataset: Path) -> None:
             self._last_json = [str(path) for path in history_files[:25]]
             select = self.query_one("#history_pick", Select)
             options = [("select json history", "")]
-            options.extend((describe_json_artifact(path), path) for path in self._last_json)
+            options.extend((self._artifact_select_label(path, "json"), path) for path in self._last_json)
             select.set_options(options)
             if self._last_json:
                 select.value = self._last_json[0]
@@ -1490,7 +1829,7 @@ def launch_tui(default_dataset: Path) -> None:
             self._last_logs = [str(path) for path in log_files[:25]]
             select = self.query_one("#log_pick", Select)
             options = [("select console log", "")]
-            options.extend((describe_log_artifact(path), path) for path in self._last_logs)
+            options.extend((self._artifact_select_label(path, "log"), path) for path in self._last_logs)
             select.set_options(options)
             if self._last_logs:
                 select.value = self._last_logs[0]
@@ -1825,6 +2164,9 @@ def launch_tui(default_dataset: Path) -> None:
             self._set_status("error", f"unknown command: {command}")
 
         def on_select_changed(self, event: Select.Changed) -> None:
+            if event.select.id in {"html_pick", "history_pick", "log_pick"}:
+                self.query_one("#artifact_hint", Static).update(self._build_artifact_hint())
+                return
             if event.select.id not in {"workflow", "variant", "preset", "budget"}:
                 return
             self._render_static_panels()
