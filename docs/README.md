@@ -11,6 +11,8 @@ Thư mục này dành cho người mới clone repo và cần chạy ứng dụn
 - Đọc [HUAN_LUYEN_4_MODELS.md](./HUAN_LUYEN_4_MODELS.md) để xem cách huấn luyện 4 model chính.
 - Đọc [FAMD_KMEANS_SO_K.md](./FAMD_KMEANS_SO_K.md) để xem repo chọn số cụm `k` cho K-Means như thế nào trong phần FAMD clustering.
 
+- Đọc [BEST_MODEL_DEPLOYMENT.md](./BEST_MODEL_DEPLOYMENT.md) để train artifact best model và dự đoán từ JSON/CSV.
+
 ## Lối chạy ngắn nhất
 
 ```powershell

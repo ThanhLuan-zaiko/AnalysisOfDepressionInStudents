@@ -10,14 +10,28 @@ from .contracts import (
     RunProfile,
     RunReport,
 )
+from .deployment import (
+    DEFAULT_MODEL_PATH,
+    DeployedDepressionModel,
+    DeploymentBuildResult,
+    fit_final_deployment_model,
+    load_deployment,
+    predict_records,
+    save_deployment,
+    select_best_deployable_model,
+    train_best_deployment,
+)
 from .services import compare_profiles, load_dataset, profile_dataset, run_pipeline
 from src.training_budget import resolve_training_budget
 
 __all__ = [
+    "DEFAULT_MODEL_PATH",
     "ArtifactPolicy",
     "ComparisonReport",
     "DatasetBundle",
     "DatasetSplit",
+    "DeployedDepressionModel",
+    "DeploymentBuildResult",
     "ModelResult",
     "ProfileReport",
     "RunConfig",
@@ -25,8 +39,14 @@ __all__ = [
     "RunProfile",
     "RunReport",
     "compare_profiles",
+    "fit_final_deployment_model",
     "load_dataset",
+    "load_deployment",
+    "predict_records",
     "profile_dataset",
     "resolve_training_budget",
     "run_pipeline",
+    "save_deployment",
+    "select_best_deployable_model",
+    "train_best_deployment",
 ]

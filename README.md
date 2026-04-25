@@ -807,6 +807,15 @@ uv run python main.py --report
 - `results/best_model_selection.json` — model được chọn, profile, metric và lý do
 - `results/model_evidence_metrics.html`, `results/model_feature_importance_safe.html` — biểu đồ bằng chứng
 
+**Train artifact dự đoán tốt nhất:**
+
+```powershell
+robot train-best --dataset Student_Depression_Dataset.csv --preset research --budget auto
+robot predict --model models/best_depression_model.joblib --input sample.json
+```
+
+Lệnh này chọn model tốt nhất trên Safe A/Full B, fit lại model cuối và lưu `models/best_depression_model.joblib`. Kết quả chỉ dùng hỗ trợ sàng lọc/nghiên cứu, không phải chẩn đoán lâm sàng.
+
 **⏱️ Thời gian:** ~2 giây (sau khi đã có kết quả analysis).
 
 ---

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -48,6 +49,20 @@ def build_parser() -> argparse.ArgumentParser:
     history_parser = subparsers.add_parser("history", help="Load saved JSON history without rerunning")
     history_parser.add_argument("path", nargs="?")
     history_parser.add_argument("--latest", action="store_true")
+
+    train_best_parser = subparsers.add_parser("train-best", help="Train and save the best deployable screening model")
+    train_best_parser.add_argument("--dataset", default="Student_Depression_Dataset.csv")
+    train_best_parser.add_argument("--preset", choices=("quick", "research"), default="research")
+    train_best_parser.add_argument("--budget", choices=("default", "auto"), default="auto")
+    train_best_parser.add_argument("--output-dir", default="results/app")
+    train_best_parser.add_argument("--model-path", default="models/best_depression_model.joblib")
+    train_best_parser.add_argument("--metadata-path")
+    train_best_parser.add_argument("--threshold-policy", choices=("screening", "best_f1", "youden_j"), default="screening")
+
+    predict_parser = subparsers.add_parser("predict", help="Predict with a saved best-model artifact")
+    predict_parser.add_argument("--model", default="models/best_depression_model.joblib")
+    predict_parser.add_argument("--input", required=True, help="JSON or CSV file containing records to score")
+    predict_parser.add_argument("--output", help="Optional JSON or CSV path for predictions")
 
     return parser
 
@@ -172,6 +187,12 @@ def main(argv: list[str] | None = None) -> int:
         print_workflow_result(result, console)
         return 0
 
+    if args.command == "train-best":
+        return _run_train_best_command(args, console)
+
+    if args.command == "predict":
+        return _run_predict_command(args, console)
+
     request = _request_from_args(args)
     print_status(f"Đang chạy workflow: {request.workflow_id} ...", console)
     result = execute_workflow(request)
@@ -215,6 +236,73 @@ def _request_from_args(args: argparse.Namespace) -> WorkflowRequest:
         console_only=getattr(args, "console_only", False),
         training_budget_mode=getattr(args, "budget", "default"),
     )
+
+
+def _run_train_best_command(args: argparse.Namespace, console: object | None) -> int:
+    from src.app import train_best_deployment
+
+    print_status("Training A/B comparison and final deployable model...", console)
+    result = train_best_deployment(
+        dataset_path=args.dataset,
+        preset=args.preset,
+        training_budget_mode=args.budget,
+        output_dir=args.output_dir,
+        model_path=args.model_path,
+        metadata_path=args.metadata_path,
+        threshold_policy=args.threshold_policy,
+    )
+    selection = result.selection
+    holdout = selection.get("holdout", {})
+    print_status(
+        (
+            f"Best deployable model: {selection.get('model')} "
+            f"profile={selection.get('profile')} "
+            f"roc_auc={holdout.get('roc_auc')} "
+            f"threshold={selection.get('threshold')}"
+        ),
+        console,
+    )
+    print_status(f"Model artifact: {result.model_path}", console)
+    print_status(f"Metadata: {result.metadata_path}", console)
+    if result.selection_path:
+        print_status(f"Best-selection JSON: {result.selection_path}", console)
+    return 0
+
+
+def _run_predict_command(args: argparse.Namespace, console: object | None) -> int:
+    from src.app import load_deployment
+
+    model = load_deployment(args.model)
+    records = _read_prediction_input(args.input)
+    predictions = model.predict_frame(records)
+
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if output_path.suffix.lower() == ".csv":
+            predictions.to_csv(output_path, index=False)
+        else:
+            output_path.write_text(
+                predictions.to_json(orient="records", force_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        print_status(f"Predictions saved: {output_path}", console)
+        return 0
+
+    print(predictions.to_json(orient="records", force_ascii=False, indent=2))
+    return 0
+
+
+def _read_prediction_input(path: str | Path):
+    import pandas as pd
+
+    input_path = Path(path)
+    if not input_path.exists():
+        raise FileNotFoundError(f"Prediction input not found: {input_path}")
+    if input_path.suffix.lower() == ".csv":
+        return pd.read_csv(input_path)
+
+    return json.loads(input_path.read_text(encoding="utf-8"))
 
 
 def _resolve_variant_arg(args: argparse.Namespace) -> str:

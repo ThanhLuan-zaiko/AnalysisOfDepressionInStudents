@@ -51,11 +51,46 @@ def launch_tui(default_dataset: Path) -> None:
             Binding("4", "load_history", "History", priority=True),
             Binding("5", "toggle_json_dump", "JSON", priority=True),
             Binding("6", "load_console_log", "Log", priority=True),
+            Binding("p", "predict_current", "Predict"),
             Binding("f5", "refresh_html", "Refresh", priority=True),
             Binding(":", "toggle_command_palette", "Command", priority=True),
             Binding("r", "rerun_current", "Rerun", priority=True),
             Binding("q", "quit", "Quit", priority=True),
         ]
+        PREDICTION_INPUT_IDS = (
+            "#pred_model_path",
+            "#pred_age",
+            "#pred_city",
+            "#pred_cgpa",
+            "#pred_degree",
+            "#pred_work_study_hours",
+        )
+        PREDICTION_SELECT_IDS = (
+            "#pred_gender",
+            "#pred_academic_pressure",
+            "#pred_study_satisfaction",
+            "#pred_sleep_duration",
+            "#pred_dietary_habits",
+            "#pred_financial_stress",
+            "#pred_family_history",
+            "#pred_suicidal",
+        )
+        PREDICTION_FIELD_LABEL_IDS = (
+            "#pred_model_path_label",
+            "#pred_gender_label",
+            "#pred_age_label",
+            "#pred_city_label",
+            "#pred_academic_pressure_label",
+            "#pred_cgpa_label",
+            "#pred_study_satisfaction_label",
+            "#pred_sleep_duration_label",
+            "#pred_dietary_habits_label",
+            "#pred_degree_label",
+            "#pred_work_study_hours_label",
+            "#pred_financial_stress_label",
+            "#pred_family_history_label",
+            "#pred_suicidal_label",
+        )
 
         STATUS_THEME = {
             "ready": {"fg": "#93F5C6", "bg": "#0A141B", "border": "#2CC585"},
@@ -184,6 +219,71 @@ def launch_tui(default_dataset: Path) -> None:
                             yield Button("6  LOAD CONSOLE LOG", id="load_log_btn")
                             yield Button("R  RERUN CURRENT", id="rerun_btn")
                             yield Button("REFRESH ARTIFACT LISTS", id="refresh_btn")
+                            yield Static("dự đoán trầm cảm", id="prediction_label")
+                            yield Static(id="prediction_hint")
+                            yield Static("Đường dẫn model đã train", id="pred_model_path_label")
+                            yield Input(
+                                value="models/best_depression_model.joblib",
+                                placeholder="models/best_depression_model.joblib",
+                                id="pred_model_path",
+                            )
+                            yield Static("Giới tính", id="pred_gender_label")
+                            yield Select([("Nữ", "Female"), ("Nam", "Male")], value="Female", prompt="Chọn giới tính", id="pred_gender")
+                            yield Static("Tuổi", id="pred_age_label")
+                            yield Input(value="22", placeholder="Nhập tuổi", id="pred_age")
+                            yield Static("Thành phố", id="pred_city_label")
+                            yield Input(value="Hanoi", placeholder="VD: Hanoi", id="pred_city")
+                            yield Static("Áp lực học tập (1 = thấp, 5 = cao)", id="pred_academic_pressure_label")
+                            yield Select(
+                                [(f"{value}", str(value)) for value in range(1, 6)],
+                                value="3",
+                                prompt="Chọn mức áp lực",
+                                id="pred_academic_pressure",
+                            )
+                            yield Static("CGPA / điểm trung bình", id="pred_cgpa_label")
+                            yield Input(value="7.5", placeholder="VD: 7.5", id="pred_cgpa")
+                            yield Static("Mức hài lòng học tập (1 = thấp, 5 = cao)", id="pred_study_satisfaction_label")
+                            yield Select(
+                                [(f"{value}", str(value)) for value in range(1, 6)],
+                                value="3",
+                                prompt="Chọn mức hài lòng",
+                                id="pred_study_satisfaction",
+                            )
+                            yield Static("Thời lượng ngủ mỗi ngày", id="pred_sleep_duration_label")
+                            yield Select(
+                                [
+                                    ("Dưới 5 giờ", "Less than 5 hours"),
+                                    ("5-6 giờ", "5-6 hours"),
+                                    ("7-8 giờ", "7-8 hours"),
+                                    ("Trên 8 giờ", "More than 8 hours"),
+                                ],
+                                value="5-6 hours",
+                                prompt="Chọn thời lượng ngủ",
+                                id="pred_sleep_duration",
+                            )
+                            yield Static("Thói quen ăn uống", id="pred_dietary_habits_label")
+                            yield Select(
+                                [("Lành mạnh", "Healthy"), ("Trung bình", "Moderate"), ("Không lành mạnh", "Unhealthy")],
+                                value="Moderate",
+                                prompt="Chọn thói quen ăn uống",
+                                id="pred_dietary_habits",
+                            )
+                            yield Static("Bậc học / bằng cấp", id="pred_degree_label")
+                            yield Input(value="Bachelor", placeholder="VD: Bachelor", id="pred_degree")
+                            yield Static("Số giờ học/làm mỗi ngày", id="pred_work_study_hours_label")
+                            yield Input(value="6", placeholder="VD: 6", id="pred_work_study_hours")
+                            yield Static("Áp lực tài chính (1 = thấp, 5 = cao)", id="pred_financial_stress_label")
+                            yield Select(
+                                [(f"{value}", str(value)) for value in range(1, 6)],
+                                value="3",
+                                prompt="Chọn mức tài chính",
+                                id="pred_financial_stress",
+                            )
+                            yield Static("Gia đình có tiền sử bệnh tâm lý?", id="pred_family_history_label")
+                            yield Select([("Không", "No"), ("Có", "Yes")], value="No", prompt="Chọn có/không", id="pred_family_history")
+                            yield Static("Từng có ý nghĩ tự tử?", id="pred_suicidal_label")
+                            yield Select([("Không", "No"), ("Có", "Yes")], value="No", prompt="Chọn có/không", id="pred_suicidal")
+                            yield Button("P  DỰ ĐOÁN NGUY CƠ", id="predict_btn")
                             yield Static(id="help_box")
                     with Vertical(id="workspace"):
                         yield Static(id="status_bar")
@@ -270,6 +370,7 @@ def launch_tui(default_dataset: Path) -> None:
                 "#html_label",
                 "#history_label",
                 "#log_label",
+                "#prediction_label",
             ):
                 label = self.query_one(label_id, Static)
                 label.styles.color = palette["label_fg"]
@@ -282,13 +383,24 @@ def launch_tui(default_dataset: Path) -> None:
             control_header = self.query_one("#control_header", Static)
             control_header.styles.margin = (0, 0, 1, 0)
 
+            for field_label_id in self.PREDICTION_FIELD_LABEL_IDS:
+                self._style_prediction_field_label(field_label_id, palette)
+
             self._style_field("#dataset", palette)
+            for input_id in self.PREDICTION_INPUT_IDS:
+                self._style_field(input_id, palette)
             for select_id in ("#workflow", "#variant", "#preset", "#budget", "#html_pick", "#history_pick", "#log_pick"):
+                self._style_field(select_id, palette)
+            for select_id in self.PREDICTION_SELECT_IDS:
                 self._style_field(select_id, palette)
 
             artifact_hint = self.query_one("#artifact_hint", Static)
             artifact_hint.styles.margin = (0, 0, 1, 0)
             artifact_hint.styles.width = "100%"
+
+            prediction_hint = self.query_one("#prediction_hint", Static)
+            prediction_hint.styles.margin = (0, 0, 1, 0)
+            prediction_hint.styles.width = "100%"
 
             for check_id in ("#export_html", "#auto_open_html"):
                 checkbox = self.query_one(check_id, Checkbox)
@@ -303,6 +415,7 @@ def launch_tui(default_dataset: Path) -> None:
                 ("#load_log_btn", "#2E8DB5", "#0D2030", "#E3F8FF"),
                 ("#rerun_btn", "#8A6CFF", "#1B1437", "#E2DCFF"),
                 ("#refresh_btn", "#4FC3F7", "#092233", "#E3F8FF"),
+                ("#predict_btn", "#FFB86B", "#33210D", "#FFF1C2"),
             ):
                 button = self.query_one(button_id, Button)
                 button.styles.width = "100%"
@@ -377,6 +490,16 @@ def launch_tui(default_dataset: Path) -> None:
                     if selector in {"#html_pick", "#history_pick", "#log_pick"}:
                         overlay.styles.width = 96
 
+        def _style_prediction_field_label(self, selector: str, palette: dict[str, str] | None = None) -> None:
+            palette = palette or self._palette()
+            label = self.query_one(selector, Static)
+            label.styles.color = palette["accent_soft"]
+            label.styles.text_style = "bold"
+            label.styles.margin = (1, 0, 0, 0)
+            label.styles.padding = (0, 1)
+            label.styles.background = palette["sidebar_bg"]
+            label.styles.width = "100%"
+
         def _palette(self) -> dict[str, str]:
             return self.PALETTES["danger"] if self._danger_workflow() else self.PALETTES["default"]
 
@@ -406,14 +529,22 @@ def launch_tui(default_dataset: Path) -> None:
                 "#html_label",
                 "#history_label",
                 "#log_label",
+                "#prediction_label",
             ):
                 label = self.query_one(label_id, Static)
                 label.styles.color = palette["label_fg"]
                 label.styles.border = ("heavy", palette["label_border"])
                 label.styles.background = palette["label_bg"]
 
+            for field_label_id in self.PREDICTION_FIELD_LABEL_IDS:
+                self._style_prediction_field_label(field_label_id, palette)
+
             self._style_field("#dataset", palette)
+            for input_id in self.PREDICTION_INPUT_IDS:
+                self._style_field(input_id, palette)
             for select_id in ("#workflow", "#variant", "#preset", "#budget", "#html_pick", "#history_pick", "#log_pick"):
+                self._style_field(select_id, palette)
+            for select_id in self.PREDICTION_SELECT_IDS:
                 self._style_field(select_id, palette)
 
             cmdline = self.query_one("#cmdline", Input)
@@ -456,6 +587,11 @@ def launch_tui(default_dataset: Path) -> None:
             rerun_btn.styles.background = "#1B1437" if not self._danger_workflow() else "#2A1115"
             rerun_btn.styles.color = "#E2DCFF" if not self._danger_workflow() else "#FFE4DE"
 
+            predict_btn = self.query_one("#predict_btn", Button)
+            predict_btn.styles.border = ("round", "#FFB86B")
+            predict_btn.styles.background = "#33210D" if not self._danger_workflow() else "#30100A"
+            predict_btn.styles.color = "#FFF1C2"
+
         def _render_static_panels(self) -> None:
             self.query_one("#control_header", Static).update(self._build_control_header())
             self.query_one("#help_box", Static).update(self._build_help_panel())
@@ -471,6 +607,7 @@ def launch_tui(default_dataset: Path) -> None:
             self.query_one("#status_bar", Static).update(self._build_status_panel())
             self.query_one("#intel_panel", Static).update(self._build_intel_panel())
             self.query_one("#artifact_hint", Static).update(self._build_artifact_hint())
+            self.query_one("#prediction_hint", Static).update(self._build_prediction_hint())
 
         def _advance_boot(self) -> None:
             if self._last_action != "idle":
@@ -668,7 +805,7 @@ def launch_tui(default_dataset: Path) -> None:
                 style=f"bold {palette['meta_value']}",
             )
             text.append("  | HOT PATH  ", style=f"bold {palette['meta_label']}")
-            text.append("1 run  4 history  6 log  F5 refresh\n", style=f"bold {palette['hotkeys']}")
+            text.append("1 run  P predict  4 history  6 log  F5 refresh\n", style=f"bold {palette['hotkeys']}")
             text.append("  +", style=palette["grid"])
             text.append("-" * 49, style=palette["grid"])
             return text
@@ -710,7 +847,7 @@ def launch_tui(default_dataset: Path) -> None:
 
             hotkeys = Text(
                 " [1] run  [2] latest html  [3] selected html  [4] history  "
-                "[5] json  [6] log  [F5] refresh  [r] rerun  [:] command  [q] quit ",
+                "[5] json  [6] log  [P] predict  [F5] refresh  [r] rerun  [:] command  [q] quit ",
                 style=f"bold {palette['hotkeys']}",
             )
 
@@ -759,7 +896,7 @@ def launch_tui(default_dataset: Path) -> None:
             text = Text()
             text.append("CONTROL CARTRIDGES\n", style=f"bold {palette['accent_soft']}")
             text.append("workflow | variant | preset | budget\n", style=palette["meta_value"])
-            text.append("html | history | console log | wheel / PgUp / PgDn = scroll", style=palette["hotkeys"])
+            text.append("html | history | console log | prediction form | wheel / PgUp / PgDn = scroll", style=palette["hotkeys"])
             return Panel(text, border_style=palette["artifact_border"], box=box.HEAVY)
 
         def _build_help_panel(self) -> Panel:
@@ -1152,6 +1289,31 @@ def launch_tui(default_dataset: Path) -> None:
                 box=box.ROUNDED,
             )
 
+        def _build_prediction_hint(self) -> Panel:
+            palette = self._palette()
+            model_path = Path(self.query_one("#pred_model_path", Input).value.strip() or "models/best_depression_model.joblib")
+            state = "sẵn sàng" if model_path.exists() else "chưa có"
+            rows = [
+                ("model", self._path_brief(model_path)),
+                ("trạng thái", state),
+                ("chạy", "P hoặc :predict"),
+            ]
+            table = Table(box=box.SIMPLE, show_header=False, expand=True, pad_edge=False)
+            table.add_column("field", style=f"bold {palette['meta_label']}", width=10, no_wrap=True)
+            table.add_column("value", style=palette["meta_value"], ratio=1)
+            for key, value in rows:
+                table.add_row(key, value)
+            hint = Text(
+                "Nếu chưa có model: robot train-best --preset research --budget auto",
+                style=palette["hotkeys"] if model_path.exists() else f"bold {palette['skull']}",
+            )
+            return Panel(
+                Group(table, hint),
+                title="[bold]DỰ ĐOÁN[/]",
+                border_style="#FFB86B" if model_path.exists() else palette["skull"],
+                box=box.ROUNDED,
+            )
+
         def _workflow_rows(self) -> list[tuple[str, str]]:
             spec = self._selected_spec()
             export_html = self.query_one("#export_html", Checkbox).value
@@ -1174,6 +1336,7 @@ def launch_tui(default_dataset: Path) -> None:
         def _operator_rows(self) -> list[tuple[str, str]]:
             return [
                 ("run", "1 / :run"),
+                ("predict", "P / :predict"),
                 ("review", "4 JSON, 6 LOG"),
                 ("html", "2 latest, 3 selected"),
                 ("refresh", "F5 artifact lists"),
@@ -1192,6 +1355,7 @@ def launch_tui(default_dataset: Path) -> None:
             text.append("> press 4 to load selected json history artifact\n", style=palette["meta_label"])
             text.append("> press 5 to toggle forensic json dump for current result\n", style=palette["meta_label"])
             text.append("> press 6 to load selected console log artifact\n", style=palette["meta_label"])
+            text.append("> điền form dự đoán bên trái rồi nhấn P để sàng lọc một hồ sơ\n", style="#FFB86B")
             text.append("> press r to rerun previous workflow\n", style=palette["delta_border"])
             text.append("> press : to open command palette\n", style="#E0B8FF")
             text.append("> press F5 to refresh html/json/log artifact lists\n", style=palette["hotkeys"])
@@ -1354,6 +1518,130 @@ def launch_tui(default_dataset: Path) -> None:
                 background_color="default",
             )
             return self._channel_frame(title, syntax, palette["output_border"])
+
+        def _prediction_record(self) -> dict[str, Any]:
+            return {
+                "Gender": str(self.query_one("#pred_gender", Select).value or "Female"),
+                "Age": self._prediction_number("#pred_age", "Tuổi"),
+                "City": self.query_one("#pred_city", Input).value.strip() or "Unknown",
+                "Academic Pressure": self._prediction_number("#pred_academic_pressure", "Áp lực học tập", is_select=True),
+                "CGPA": self._prediction_number("#pred_cgpa", "CGPA"),
+                "Study Satisfaction": self._prediction_number("#pred_study_satisfaction", "Mức hài lòng học tập", is_select=True),
+                "Sleep Duration": str(self.query_one("#pred_sleep_duration", Select).value or "5-6 hours"),
+                "Dietary Habits": str(self.query_one("#pred_dietary_habits", Select).value or "Moderate"),
+                "Degree": self.query_one("#pred_degree", Input).value.strip() or "Unknown",
+                "Have you ever had suicidal thoughts ?": str(self.query_one("#pred_suicidal", Select).value or "No"),
+                "Work/Study Hours": self._prediction_number("#pred_work_study_hours", "Số giờ học/làm mỗi ngày"),
+                "Financial Stress": self._prediction_number("#pred_financial_stress", "Áp lực tài chính", is_select=True),
+                "Family History of Mental Illness": str(self.query_one("#pred_family_history", Select).value or "No"),
+            }
+
+        def _prediction_number(self, selector: str, label: str, *, is_select: bool = False) -> float:
+            if is_select:
+                raw_value = self.query_one(selector, Select).value
+            else:
+                raw_value = self.query_one(selector, Input).value
+            text = str(raw_value or "").strip()
+            if not text:
+                raise ValueError(f"{label} là bắt buộc.")
+            try:
+                return float(text)
+            except ValueError as exc:
+                raise ValueError(f"{label} phải là số, giá trị hiện tại: {text}") from exc
+
+        def _prediction_result_output(self, prediction: dict[str, Any], record: dict[str, Any], metadata: dict[str, Any]) -> Group:
+            palette = self._palette()
+            flagged = int(prediction.get("prediction", 0)) == 1
+            verdict = "CÓ DẤU HIỆU NGUY CƠ TRẦM CẢM" if flagged else "CHƯA VƯỢT NGƯỠNG SÀNG LỌC"
+            verdict_style = f"bold {palette['skull']}" if flagged else f"bold {palette['accent_soft']}"
+
+            result_table = Table(box=box.SIMPLE_HEAVY, show_header=False, expand=True)
+            result_table.add_column("chỉ số", style=f"bold {palette['meta_label']}", width=18)
+            result_table.add_column("giá trị", style=palette["meta_value"])
+            result_table.add_row("kết luận", verdict)
+            result_table.add_row("xác suất", self._format_signal(prediction.get("probability"), 18))
+            result_table.add_row("ngưỡng", self._format_signal(prediction.get("threshold"), 18))
+            result_table.add_row("chính sách ngưỡng", str(prediction.get("threshold_policy")))
+            result_table.add_row("model", str(prediction.get("model")))
+            result_table.add_row("profile", str(prediction.get("profile")))
+
+            display_labels = {
+                "Gender": "Giới tính",
+                "Age": "Tuổi",
+                "City": "Thành phố",
+                "Academic Pressure": "Áp lực học tập",
+                "CGPA": "CGPA / điểm TB",
+                "Study Satisfaction": "Hài lòng học tập",
+                "Sleep Duration": "Thời lượng ngủ",
+                "Dietary Habits": "Thói quen ăn uống",
+                "Degree": "Bậc học / bằng cấp",
+                "Have you ever had suicidal thoughts ?": "Từng có ý nghĩ tự tử",
+                "Work/Study Hours": "Giờ học/làm mỗi ngày",
+                "Financial Stress": "Áp lực tài chính",
+                "Family History of Mental Illness": "Tiền sử gia đình",
+            }
+            display_values = {
+                "Gender": {"Female": "Nữ", "Male": "Nam"},
+                "Sleep Duration": {
+                    "Less than 5 hours": "Dưới 5 giờ",
+                    "5-6 hours": "5-6 giờ",
+                    "7-8 hours": "7-8 giờ",
+                    "More than 8 hours": "Trên 8 giờ",
+                },
+                "Dietary Habits": {"Healthy": "Lành mạnh", "Moderate": "Trung bình", "Unhealthy": "Không lành mạnh"},
+                "Have you ever had suicidal thoughts ?": {"No": "Không", "Yes": "Có"},
+                "Family History of Mental Illness": {"No": "Không", "Yes": "Có"},
+            }
+            input_table = Table(title="Hồ Sơ Đã Nhập", box=box.SIMPLE, show_header=False, expand=True)
+            input_table.add_column("trường", style=f"bold {palette['meta_label']}", width=34)
+            input_table.add_column("giá trị", style=palette["meta_value"])
+            selected_columns = metadata.get("selected_columns", [])
+            for key, value in record.items():
+                marker = "*" if key in selected_columns else ""
+                display_value = display_values.get(key, {}).get(str(value), value)
+                input_table.add_row(f"{display_labels.get(key, key)}{marker}", self._format_signal(display_value, 40))
+
+            note = Text()
+            note.append(verdict + "\n", style=verdict_style)
+            note.append(
+                "Đây là kết quả hỗ trợ sàng lọc, không phải chẩn đoán lâm sàng. "
+                "Nếu có dấu hiệu nguy cơ, nên trao đổi với chuyên gia sức khỏe tâm thần.",
+                style=palette["hotkeys"],
+            )
+            return self._wrap_with_scanlines(
+                Panel(
+                    Group(
+                        Text(self._grid_line(96, 6), style=palette["grid"]),
+                        Text(self._radar_sweep(96, 3), style="#FFB86B"),
+                        note,
+                        result_table,
+                        input_table,
+                        Text("* = cột được artifact triển khai sử dụng", style=palette["hotkeys"]),
+                        Text(self._grid_line(96, 8), style=palette["grid"]),
+                    ),
+                    title="[bold]DỰ ĐOÁN SÀNG LỌC TRẦM CẢM[/]",
+                    border_style="#FFB86B",
+                    box=box.DOUBLE,
+                )
+            )
+
+        def _prediction_error_output(self, message: str) -> Group:
+            palette = self._palette()
+            return self._wrap_with_scanlines(
+                Panel(
+                    Group(
+                        Text("Không thể chạy dự đoán.\n", style=f"bold {palette['skull']}"),
+                        Text(message, style=palette["meta_value"]),
+                        Text(
+                            "\nHãy train artifact trước bằng: robot train-best --dataset Student_Depression_Dataset.csv --preset research --budget auto",
+                            style=palette["hotkeys"],
+                        ),
+                    ),
+                    title="[bold]LỖI DỰ ĐOÁN[/]",
+                    border_style=palette["skull"],
+                    box=box.HEAVY,
+                )
+            )
 
         def _format_signal(self, value: Any, limit: int = 88) -> str:
             if value is None:
@@ -2026,6 +2314,26 @@ def launch_tui(default_dataset: Path) -> None:
                 self.set_focus(None)
                 self._set_status("ready", "command palette closed")
 
+        def action_predict_current(self) -> None:
+            model_path = Path(self.query_one("#pred_model_path", Input).value.strip() or "models/best_depression_model.joblib")
+            try:
+                from src.app import load_deployment
+
+                record = self._prediction_record()
+                deployment = load_deployment(model_path)
+                prediction = deployment.predict(record)[0]
+            except Exception as exc:
+                self._last_action = "predict:error"
+                self._set_output(self._prediction_error_output(str(exc)))
+                self._set_status("error", f"dự đoán lỗi: {exc}")
+                return
+
+            self._last_action = "predict"
+            self._set_output(self._prediction_result_output(prediction, record, deployment.metadata))
+            label = "có nguy cơ" if int(prediction.get("prediction", 0)) == 1 else "chưa vượt ngưỡng"
+            probability = prediction.get("probability")
+            self._set_status("success", f"{label}; xác suất={probability}")
+
         def on_button_pressed(self, event: Button.Pressed) -> None:
             if event.button.id == "run_btn":
                 self._start_workflow()
@@ -2041,6 +2349,8 @@ def launch_tui(default_dataset: Path) -> None:
                 self.action_rerun_current()
             elif event.button.id == "refresh_btn":
                 self.action_refresh_html()
+            elif event.button.id == "predict_btn":
+                self.action_predict_current()
 
         def _open_selected_html(self) -> None:
             value = self.query_one("#html_pick", Select).value
@@ -2075,6 +2385,9 @@ def launch_tui(default_dataset: Path) -> None:
 
             if normalized in {"run", "1"}:
                 self._start_workflow()
+                return
+            if normalized in {"predict", "risk", "screen", "p"}:
+                self.action_predict_current()
                 return
             if normalized in {"rerun", "repeat", "r"}:
                 self.action_rerun_current()
