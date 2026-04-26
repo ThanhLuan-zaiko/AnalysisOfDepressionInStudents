@@ -136,6 +136,7 @@ Nếu workflow chưa có parser chuyên biệt, app vẫn tạo đánh giá tổ
 | `4` | Load JSON history |
 | `5` | Bật/tắt forensic JSON dump |
 | `6` | Load console log đã lưu |
+| `T` | Train/export best model artifact để dùng cho prediction |
 | `P` | Chạy prediction từ form nhập hồ sơ trong TUI |
 | `F5` | Refresh danh sách HTML / JSON / LOG |
 | `r` | Chạy lại workflow gần nhất |
@@ -161,6 +162,8 @@ Nhấn `:` rồi gõ một trong các lệnh sau:
 :history load
 :log latest
 :log load
+:train-best
+:export-model
 :predict
 :json toggle
 :json on

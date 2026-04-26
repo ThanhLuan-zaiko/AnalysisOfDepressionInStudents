@@ -39,6 +39,7 @@ Hero phía trên đã được rút gọn để dành nhiều diện tích hơn 
 | `4` | Load JSON history |
 | `5` | Bật hoặc tắt forensic JSON dump |
 | `6` | Load console log đã lưu |
+| `T` | Train/export best model artifact để form dự đoán dùng ngay |
 | `P` | Chạy dự đoán sàng lọc từ form prediction và artifact best model |
 | `F5` | Refresh danh sách HTML / JSON / LOG artifact |
 | `r` | Chạy lại workflow gần nhất |
@@ -80,6 +81,8 @@ Nhấn `:` rồi gõ:
 :history load
 :log latest
 :log load
+:train-best
+:export-model
 :predict
 :json toggle
 :json on
@@ -112,8 +115,8 @@ Chạy pipeline:
 
 Dự đoán một hồ sơ:
 
-1. Train artifact trước bằng `robot train-best --dataset Student_Depression_Dataset.csv --preset research --budget auto`
-2. Mở TUI bằng `robot`
+1. Mở TUI bằng `robot`
+2. Nếu chưa có artifact, bấm `T` để train/export best model từ dataset hiện tại
 3. Điền các trường trong vùng `prediction`
 4. Bấm `P` hoặc gõ `:predict`
 5. Đọc `probability`, `threshold`, `model`, `profile` và kết luận sàng lọc trong workspace

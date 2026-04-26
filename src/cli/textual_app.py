@@ -51,6 +51,7 @@ def launch_tui(default_dataset: Path) -> None:
             Binding("4", "load_history", "History", priority=True),
             Binding("5", "toggle_json_dump", "JSON", priority=True),
             Binding("6", "load_console_log", "Log", priority=True),
+            Binding("t", "train_best_model", "Train Model"),
             Binding("p", "predict_current", "Predict"),
             Binding("f5", "refresh_html", "Refresh", priority=True),
             Binding(":", "toggle_command_palette", "Command", priority=True),
@@ -219,6 +220,7 @@ def launch_tui(default_dataset: Path) -> None:
                             yield Button("6  LOAD CONSOLE LOG", id="load_log_btn")
                             yield Button("R  RERUN CURRENT", id="rerun_btn")
                             yield Button("REFRESH ARTIFACT LISTS", id="refresh_btn")
+                            yield Button("T  TẠO MODEL DỰ ĐOÁN", id="train_best_btn")
                             yield Static("dự đoán trầm cảm", id="prediction_label")
                             yield Static(id="prediction_hint")
                             yield Static("Đường dẫn model đã train", id="pred_model_path_label")
@@ -415,6 +417,7 @@ def launch_tui(default_dataset: Path) -> None:
                 ("#load_log_btn", "#2E8DB5", "#0D2030", "#E3F8FF"),
                 ("#rerun_btn", "#8A6CFF", "#1B1437", "#E2DCFF"),
                 ("#refresh_btn", "#4FC3F7", "#092233", "#E3F8FF"),
+                ("#train_best_btn", "#43D17A", "#102A1D", "#E3FFE9"),
                 ("#predict_btn", "#FFB86B", "#33210D", "#FFF1C2"),
             ):
                 button = self.query_one(button_id, Button)
@@ -591,6 +594,11 @@ def launch_tui(default_dataset: Path) -> None:
             predict_btn.styles.border = ("round", "#FFB86B")
             predict_btn.styles.background = "#33210D" if not self._danger_workflow() else "#30100A"
             predict_btn.styles.color = "#FFF1C2"
+
+            train_best_btn = self.query_one("#train_best_btn", Button)
+            train_best_btn.styles.border = ("round", palette["accent"])
+            train_best_btn.styles.background = palette["accent_bg"]
+            train_best_btn.styles.color = palette["field_fg"]
 
         def _render_static_panels(self) -> None:
             self.query_one("#control_header", Static).update(self._build_control_header())
@@ -805,7 +813,7 @@ def launch_tui(default_dataset: Path) -> None:
                 style=f"bold {palette['meta_value']}",
             )
             text.append("  | HOT PATH  ", style=f"bold {palette['meta_label']}")
-            text.append("1 run  P predict  4 history  6 log  F5 refresh\n", style=f"bold {palette['hotkeys']}")
+            text.append("1 run  T model  P predict  4 history  6 log\n", style=f"bold {palette['hotkeys']}")
             text.append("  +", style=palette["grid"])
             text.append("-" * 49, style=palette["grid"])
             return text
@@ -847,7 +855,7 @@ def launch_tui(default_dataset: Path) -> None:
 
             hotkeys = Text(
                 " [1] run  [2] latest html  [3] selected html  [4] history  "
-                "[5] json  [6] log  [P] predict  [F5] refresh  [r] rerun  [:] command  [q] quit ",
+                "[5] json  [6] log  [T] model  [P] predict  [F5] refresh  [r] rerun  [:] command  [q] quit ",
                 style=f"bold {palette['hotkeys']}",
             )
 
@@ -896,7 +904,7 @@ def launch_tui(default_dataset: Path) -> None:
             text = Text()
             text.append("CONTROL CARTRIDGES\n", style=f"bold {palette['accent_soft']}")
             text.append("workflow | variant | preset | budget\n", style=palette["meta_value"])
-            text.append("html | history | console log | prediction form | wheel / PgUp / PgDn = scroll", style=palette["hotkeys"])
+            text.append("html | history | train/export model | prediction form | scroll", style=palette["hotkeys"])
             return Panel(text, border_style=palette["artifact_border"], box=box.HEAVY)
 
         def _build_help_panel(self) -> Panel:
@@ -915,6 +923,8 @@ def launch_tui(default_dataset: Path) -> None:
             text.append("toggle raw json channel with line numbers\n", style="#87B7C8")
             text.append("6  CONSOLE LOG     ", style="bold #DDF8FF")
             text.append("load saved console output with line numbers\n", style="#87B7C8")
+            text.append("T  TRAIN MODEL     ", style="bold #E3FFE9")
+            text.append("train/export best model artifact for prediction\n", style="#87B7C8")
             text.append("R  RERUN           ", style="bold #E2DCFF")
             text.append("repeat previous workflow\n", style="#87B7C8")
             text.append(":  COMMAND         ", style="bold #E6DDFF")
@@ -1304,7 +1314,7 @@ def launch_tui(default_dataset: Path) -> None:
             for key, value in rows:
                 table.add_row(key, value)
             hint = Text(
-                "Nếu chưa có model: robot train-best --preset research --budget auto",
+                "Nếu chưa có model, bấm T để train/export ngay trong TUI.",
                 style=palette["hotkeys"] if model_path.exists() else f"bold {palette['skull']}",
             )
             return Panel(
@@ -1336,6 +1346,7 @@ def launch_tui(default_dataset: Path) -> None:
         def _operator_rows(self) -> list[tuple[str, str]]:
             return [
                 ("run", "1 / :run"),
+                ("train", "T / :train-best"),
                 ("predict", "P / :predict"),
                 ("review", "4 JSON, 6 LOG"),
                 ("html", "2 latest, 3 selected"),
@@ -1355,6 +1366,7 @@ def launch_tui(default_dataset: Path) -> None:
             text.append("> press 4 to load selected json history artifact\n", style=palette["meta_label"])
             text.append("> press 5 to toggle forensic json dump for current result\n", style=palette["meta_label"])
             text.append("> press 6 to load selected console log artifact\n", style=palette["meta_label"])
+            text.append("> nhấn T để tạo artifact model dự đoán từ dataset hiện tại\n", style=palette["accent_soft"])
             text.append("> điền form dự đoán bên trái rồi nhấn P để sàng lọc một hồ sơ\n", style="#FFB86B")
             text.append("> press r to rerun previous workflow\n", style=palette["delta_border"])
             text.append("> press : to open command palette\n", style="#E0B8FF")
@@ -1633,11 +1645,116 @@ def launch_tui(default_dataset: Path) -> None:
                         Text("Không thể chạy dự đoán.\n", style=f"bold {palette['skull']}"),
                         Text(message, style=palette["meta_value"]),
                         Text(
-                            "\nHãy train artifact trước bằng: robot train-best --dataset Student_Depression_Dataset.csv --preset research --budget auto",
+                            "\nBấm T trong TUI để tạo artifact, hoặc chạy: robot train-best --dataset Student_Depression_Dataset.csv --preset research --budget auto",
                             style=palette["hotkeys"],
                         ),
                     ),
                     title="[bold]LỖI DỰ ĐOÁN[/]",
+                    border_style=palette["skull"],
+                    box=box.HEAVY,
+                )
+            )
+
+        def _train_best_running_output(
+            self,
+            *,
+            dataset_path: str,
+            preset: str,
+            training_budget_mode: str,
+            model_path: str,
+        ) -> Group:
+            palette = self._palette()
+            command = (
+                "robot train-best "
+                f"--dataset {dataset_path} "
+                f"--preset {preset} "
+                f"--budget {training_budget_mode} "
+                f"--model-path {model_path}"
+            )
+            text = Text()
+            text.append("Đang train và xuất best model artifact...\n\n", style=f"bold {palette['accent_soft']}")
+            text.append("TUI đang chạy tương đương lệnh:\n", style=palette["meta_label"])
+            text.append(command, style=palette["meta_value"])
+            text.append(
+                "\n\nSau khi hoàn tất, ô model trong form dự đoán sẽ trỏ tới artifact vừa tạo.",
+                style=palette["hotkeys"],
+            )
+            return self._wrap_with_scanlines(
+                Panel(
+                    Group(
+                        Text(self._grid_line(96, 2), style=palette["grid"]),
+                        Text(self._radar_sweep(96, 4), style=palette["accent"]),
+                        text,
+                        Text(self._grid_line(96, 6), style=palette["grid"]),
+                    ),
+                    title="[bold]TRAIN / EXPORT MODEL[/]",
+                    border_style=palette["accent"],
+                    box=box.DOUBLE,
+                )
+            )
+
+        def _train_best_result_output(self, result: Any) -> Group:
+            palette = self._palette()
+            selection = result.selection if isinstance(result.selection, dict) else {}
+            holdout = selection.get("holdout", {}) if isinstance(selection.get("holdout"), dict) else {}
+            metadata = result.metadata if isinstance(result.metadata, dict) else {}
+
+            table = Table(box=box.SIMPLE_HEAVY, show_header=False, expand=True)
+            table.add_column("trường", style=f"bold {palette['meta_label']}", width=22)
+            table.add_column("giá trị", style=palette["meta_value"])
+            table.add_row("model tốt nhất", str(selection.get("model", "n/a")))
+            table.add_row("profile", str(selection.get("profile", "n/a")))
+            table.add_row("ROC-AUC", self._format_signal(holdout.get("roc_auc"), 18))
+            table.add_row("PR-AUC", self._format_signal(holdout.get("pr_auc"), 18))
+            table.add_row("F1", self._format_signal(holdout.get("f1"), 18))
+            table.add_row("ngưỡng", self._format_signal(selection.get("threshold"), 18))
+            table.add_row("số cột dùng", str(len(metadata.get("selected_columns", []))))
+
+            artifact_table = Table(title="Artifact Đã Tạo", box=box.SIMPLE, show_header=False, expand=True)
+            artifact_table.add_column("loại", style=f"bold {palette['meta_label']}", width=18)
+            artifact_table.add_column("đường dẫn", style=palette["meta_value"])
+            artifact_table.add_row("model", str(result.model_path))
+            artifact_table.add_row("metadata", str(result.metadata_path))
+            if result.selection_path:
+                artifact_table.add_row("best selection", str(result.selection_path))
+            if result.comparison_path:
+                artifact_table.add_row("comparison", str(result.comparison_path))
+
+            note = Text()
+            note.append("Model triển khai đã sẵn sàng cho form dự đoán.\n", style=f"bold {palette['accent_soft']}")
+            note.append(
+                "Bấm P để chạy sàng lọc trên hồ sơ đang nhập. Kết quả vẫn chỉ là hỗ trợ sàng lọc, không phải chẩn đoán lâm sàng.",
+                style=palette["hotkeys"],
+            )
+            return self._wrap_with_scanlines(
+                Panel(
+                    Group(
+                        Text(self._grid_line(96, 10), style=palette["grid"]),
+                        Text(self._radar_sweep(96, 12), style=palette["accent"]),
+                        note,
+                        table,
+                        artifact_table,
+                        Text(self._grid_line(96, 14), style=palette["grid"]),
+                    ),
+                    title="[bold]BEST MODEL ARTIFACT READY[/]",
+                    border_style=palette["accent"],
+                    box=box.DOUBLE,
+                )
+            )
+
+        def _train_best_error_output(self, message: str) -> Group:
+            palette = self._palette()
+            return self._wrap_with_scanlines(
+                Panel(
+                    Group(
+                        Text("Không thể tạo model artifact.\n", style=f"bold {palette['skull']}"),
+                        Text(message, style=palette["meta_value"]),
+                        Text(
+                            "\nKiểm tra lại dataset path, preset/budget và dependency của model trước khi chạy lại.",
+                            style=palette["hotkeys"],
+                        ),
+                    ),
+                    title="[bold]LỖI TRAIN / EXPORT MODEL[/]",
                     border_style=palette["skull"],
                     box=box.HEAVY,
                 )
@@ -2314,6 +2431,35 @@ def launch_tui(default_dataset: Path) -> None:
                 self.set_focus(None)
                 self._set_status("ready", "command palette closed")
 
+        def action_train_best_model(self) -> None:
+            dataset_path = self.query_one("#dataset", Input).value.strip()
+            if not dataset_path:
+                self._last_action = "train-best:error"
+                self._set_output(self._train_best_error_output("Dataset path đang trống."))
+                self._set_status("error", "dataset path đang trống")
+                return
+            if not Path(dataset_path).exists():
+                self._last_action = "train-best:error"
+                self._set_output(self._train_best_error_output(f"Không tìm thấy dataset: {dataset_path}"))
+                self._set_status("error", f"không tìm thấy dataset: {dataset_path}")
+                return
+
+            preset = str(self.query_one("#preset", Select).value or "research")
+            training_budget_mode = str(self.query_one("#budget", Select).value or "auto")
+            model_path = self.query_one("#pred_model_path", Input).value.strip() or "models/best_depression_model.joblib"
+
+            self._last_action = "train-best"
+            self._set_status("running", "đang train/export best model")
+            self._set_output(
+                self._train_best_running_output(
+                    dataset_path=dataset_path,
+                    preset=preset,
+                    training_budget_mode=training_budget_mode,
+                    model_path=model_path,
+                )
+            )
+            self._train_best_worker(dataset_path, preset, training_budget_mode, model_path)
+
         def action_predict_current(self) -> None:
             model_path = Path(self.query_one("#pred_model_path", Input).value.strip() or "models/best_depression_model.joblib")
             try:
@@ -2349,6 +2495,8 @@ def launch_tui(default_dataset: Path) -> None:
                 self.action_rerun_current()
             elif event.button.id == "refresh_btn":
                 self.action_refresh_html()
+            elif event.button.id == "train_best_btn":
+                self.action_train_best_model()
             elif event.button.id == "predict_btn":
                 self.action_predict_current()
 
@@ -2385,6 +2533,9 @@ def launch_tui(default_dataset: Path) -> None:
 
             if normalized in {"run", "1"}:
                 self._start_workflow()
+                return
+            if normalized in {"train-best", "train best", "export-model", "export model", "model", "t"}:
+                self.action_train_best_model()
                 return
             if normalized in {"predict", "risk", "screen", "p"}:
                 self.action_predict_current()
@@ -2513,6 +2664,43 @@ def launch_tui(default_dataset: Path) -> None:
                 output_scroll.scroll_end(animate=False)
                 intel_scroll.scroll_end(animate=False)
                 event.stop()
+
+        @work(thread=True, exclusive=True)
+        def _train_best_worker(
+            self,
+            dataset_path: str,
+            preset: str,
+            training_budget_mode: str,
+            model_path: str,
+        ) -> None:
+            try:
+                from src.app import train_best_deployment
+
+                result = train_best_deployment(
+                    dataset_path=dataset_path,
+                    preset=preset,
+                    training_budget_mode=training_budget_mode,
+                    output_dir="results/app",
+                    model_path=model_path,
+                    threshold_policy="screening",
+                )
+                self.call_from_thread(self._train_best_done, result)
+            except Exception as exc:  # pragma: no cover - interactive path
+                self.call_from_thread(self._train_best_failed, exc)
+
+        def _train_best_done(self, result: Any) -> None:
+            self.query_one("#pred_model_path", Input).value = str(result.model_path)
+            self._json_cache.clear()
+            self._refresh_history_options()
+            self._refresh_log_options()
+            self._last_action = "train-best:done"
+            self._set_output(self._train_best_result_output(result))
+            self._set_status("success", f"model artifact ready: {Path(result.model_path).name}")
+
+        def _train_best_failed(self, exc: Exception) -> None:
+            self._last_action = "train-best:error"
+            self._set_output(self._train_best_error_output(str(exc)))
+            self._set_status("error", f"train/export model lỗi: {exc}")
 
         @work(thread=True, exclusive=True)
         def _workflow_worker(self, request: WorkflowRequest) -> None:

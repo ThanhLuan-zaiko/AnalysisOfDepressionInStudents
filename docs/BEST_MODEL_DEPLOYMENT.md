@@ -81,4 +81,6 @@ Sau khi đã có `models/best_depression_model.joblib`:
 robot
 ```
 
+Nếu chưa có artifact, bấm `T` trong TUI để train/export best model từ dataset/preset/budget đang chọn.
+
 Trong control deck bên trái, điền vùng `prediction`, rồi bấm `P` hoặc gõ `:predict`. Workspace sẽ hiển thị xác suất, ngưỡng đang dùng, model/profile được chọn và kết luận sàng lọc.
